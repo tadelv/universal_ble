@@ -54,6 +54,16 @@ class UniversalBle {
   static Stream<bool> connectionStream(String deviceId) =>
       _platform.connectionStream(deviceId);
 
+  /// Connection update stream with native disconnect reason.
+  ///
+  /// Unlike [connectionStream] which only emits `true`/`false`, this
+  /// stream emits a record containing the device ID, connection state,
+  /// and the native error string (e.g. "GATT_CONN_TIMEOUT") on
+  /// disconnect. The error is `null` on connect.
+  static Stream<({String deviceId, bool isConnected, String? error})>
+      connectionUpdateStream(String deviceId) =>
+          _platform.connectionUpdateStream(deviceId);
+
   /// Characteristic value stream
   static Stream<Uint8List> characteristicValueStream(
     String deviceId,

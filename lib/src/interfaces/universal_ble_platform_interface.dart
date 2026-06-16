@@ -131,6 +131,14 @@ abstract class UniversalBlePlatform {
           .where((e) => e.deviceId == deviceId)
           .map((e) => e.isConnected);
 
+  /// Like [connectionStream] but includes the native disconnect reason
+  /// (HCI error code string, e.g. "GATT_CONN_TIMEOUT") when the
+  /// connection drops. The error is `null` on connect.
+  Stream<({String deviceId, bool isConnected, String? error})>
+      connectionUpdateStream(String deviceId) =>
+          bleConnectionUpdateStreamController.stream
+              .where((e) => e.deviceId == deviceId);
+
   Stream<Uint8List> characteristicValueStream(
     String deviceId,
     String characteristicId,
