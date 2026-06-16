@@ -63,6 +63,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val rssiResultFutureList = mutableListOf<RssiResultFuture>()
     private val autoConnectDevices = mutableSetOf<String>()
 
+    // GATT 133 retry tracking: per-device attempt counters.
+    // Reset on successful connect or non-133 disconnect.
+    private val gattRetryAttempts = mutableMapOf<String, Int>()
+    private val maxGattRetries = 3
+
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
         mainThreadHandler = Handler(Looper.getMainLooper())
@@ -1256,6 +1261,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         )
 
         if (newState == BluetoothGatt.STATE_CONNECTED) {
+            // Reset retry counter on successful connection
+            gattRetryAttempts.remove(gatt.device.address)
             mainThreadHandler?.post {
                 callbackChannel?.onConnectionChanged(
                     gatt.device.address, true, status.parseHciErrorCode()
@@ -1273,6 +1280,39 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 callbackChannel?.onConnectionChanged(
                     deviceId, false, status.parseHciErrorCode()
                 ) {}
+            }
+
+            // GATT 133 (ERROR_GATT) retry: common on older Android BLE stacks
+            // (e.g. some tablet SoCs). Retry up to maxGattRetries with
+            // increasing delay; reset counter on any non-133 disconnect or
+            // successful connect.
+            if (status == 133 && !shouldAutoConnect) {
+                val attempts = gattRetryAttempts.getOrDefault(deviceId, 0) + 1
+                if (attempts <= maxGattRetries) {
+                    gattRetryAttempts[deviceId] = attempts
+                    val delayMs = 500L * attempts
+                    UniversalBleLogger.logWarning(
+                        "GATT 133 on $deviceId (attempt $attempts/$maxGattRetries), " +
+                        "retrying in ${delayMs}ms"
+                    )
+                    mainThreadHandler?.postDelayed({
+                        // Re-connect without autoConnect — the original
+                        // connect() already registered the intent.
+                        val remoteDevice = bluetoothManager.adapter
+                            .getRemoteDevice(deviceId)
+                        remoteDevice.connectGatt(
+                            context, false, this@UniversalBlePlugin,
+                            BluetoothDevice.TRANSPORT_LE
+                        )?.saveCacheIfNeeded()
+                    }, delayMs)
+                } else {
+                    gattRetryAttempts.remove(deviceId)
+                    UniversalBleLogger.logWarning(
+                        "GATT 133 on $deviceId: exceeded $maxGattRetries retries"
+                    )
+                }
+            } else {
+                gattRetryAttempts.remove(deviceId)
             }
 
             if (!shouldAutoConnect) {
