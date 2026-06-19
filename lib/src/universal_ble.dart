@@ -343,6 +343,7 @@ class UniversalBle {
     bool withoutResponse = false,
     Duration? timeout,
     String? queueId,
+    String? coalesceKey,
   }) async {
     await _bleCommandQueue.queueCommand(
       () => _platform.writeValue(
@@ -357,6 +358,7 @@ class UniversalBle {
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
+      coalesceKey: coalesceKey,
     );
   }
 
