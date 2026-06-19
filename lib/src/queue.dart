@@ -4,6 +4,10 @@ import 'dart:async';
 
 /// Queue to execute Futures in order.
 /// It awaits each future before executing the next one.
+///
+/// Supports optional coalescing: items with the same [coalesceKey] replace
+/// earlier pending items, preventing queue bloat from rapid repeated writes
+/// to the same BLE characteristic. Pass [coalesceKey] to [add] to opt in.
 class Queue {
   final Set<int> _activeItems = {};
   int _lastProcessId = 0;
@@ -11,10 +15,13 @@ class Queue {
   final List<_QueuedFuture> _nextCycle = [];
   Function(int)? onRemainingItemsUpdate;
 
-  Future<T> add<T>(Future<T> Function() closure, [Duration? timeout]) {
+  Future<T> add<T>(Future<T> Function() closure, [Duration? timeout, String? coalesceKey]) {
     if (_isCancelled) throw Exception('Queue Cancelled');
+    if (coalesceKey != null) {
+      _cancelWhere((item) => item.coalesceKey == coalesceKey);
+    }
     final completer = Completer<T>();
-    _nextCycle.add(_QueuedFuture<T>(closure, completer, timeout));
+    _nextCycle.add(_QueuedFuture<T>(closure, completer, timeout, coalesceKey: coalesceKey));
     _updateRemainingItems();
     if (_activeItems.isEmpty) _queueUpNext();
     return completer.future;
@@ -26,6 +33,17 @@ class Queue {
     }
     _nextCycle.removeWhere((item) => item.completer.isCompleted);
     _isCancelled = true;
+  }
+
+  /// Cancel pending (not yet executing) items matching [test].
+  void _cancelWhere(bool Function(_QueuedFuture) test) {
+    for (final item in _nextCycle.toList()) {
+      if (test(item)) {
+        item.completer.completeError(Exception('Replaced by newer write'));
+        _nextCycle.remove(item);
+      }
+    }
+    _updateRemainingItems();
   }
 
   void _queueUpNext() {
@@ -55,8 +73,10 @@ class _QueuedFuture<T> {
   final Future<T> Function() closure;
   Function? onComplete;
   final Duration? timeout;
+  final String? coalesceKey;
 
-  _QueuedFuture(this.closure, this.completer, this.timeout, {this.onComplete});
+  _QueuedFuture(this.closure, this.completer, this.timeout,
+      {this.onComplete, this.coalesceKey});
 
   Future<void> execute() async {
     try {

@@ -15,14 +15,18 @@ class BleCommandQueue {
     Future<T> Function() command, {
     String? deviceId,
     Duration? timeout,
+    String? coalesceKey,
   }) {
     Duration? timeoutDuration = timeout ?? this.timeout;
     if (timeoutDuration == null) {
-      return queueCommandWithoutTimeout(command, deviceId: deviceId);
+      return queueCommandWithoutTimeout(command,
+          deviceId: deviceId, coalesceKey: coalesceKey);
     }
     return switch (queueType) {
-      QueueType.global => _queue().add(command, timeoutDuration),
-      QueueType.perDevice => _queue(deviceId).add(command, timeoutDuration),
+      QueueType.global =>
+          _queue().add(command, timeoutDuration, coalesceKey),
+      QueueType.perDevice =>
+          _queue(deviceId).add(command, timeoutDuration, coalesceKey),
       QueueType.none => command().timeout(timeoutDuration),
     };
   }
@@ -30,10 +34,12 @@ class BleCommandQueue {
   Future<T> queueCommandWithoutTimeout<T>(
     Future<T> Function() command, {
     String? deviceId,
+    String? coalesceKey,
   }) {
     return switch (queueType) {
-      QueueType.global => _queue().add(command),
-      QueueType.perDevice => _queue(deviceId).add(command),
+      QueueType.global => _queue().add(command, null, coalesceKey),
+      QueueType.perDevice =>
+          _queue(deviceId).add(command, null, coalesceKey),
       QueueType.none => command(),
     };
   }
