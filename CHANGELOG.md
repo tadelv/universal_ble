@@ -1,5 +1,8 @@
 ## 2.1.1
-* Android: Fix BluetoothDevice null-safety compile error under Kotlin 2.x
+* Android: GATT 133 retry — up to 3 attempts with 500ms→1000ms→1500ms backoff on ERROR_GATT disconnect. Common on older Android BLE stacks; retry often succeeds on the second attempt.
+* Add `connectionUpdateStream` to public API — unlike `connectionStream` which emits only bool, this stream emits full `(deviceId, isConnected, error)` record so callers can log native disconnect reason codes (e.g. 'GATT_CONN_TIMEOUT') for diagnostics.
+* Add write coalescing support: `coalesceKey` parameter on `writeValue` deduplicates pending writes to the same characteristic, preventing queue bloat from rapid repeated writes.
+* Merged upstream v2.1.0 (queueId, legacy scan, Kotlin 2.x fix, manufacturer data merge)
 
 ## 2.1.0
 * Add optional `queueId` parameter to all APIs
