@@ -256,6 +256,12 @@ fun gattStatusToUniversalBleErrorCode(code: Int): UniversalBleErrorCode {
         BluetoothGatt.GATT_INVALID_ATTRIBUTE_LENGTH -> UniversalBleErrorCode.INVALID_ATTRIBUTE_LENGTH
         BluetoothGatt.GATT_CONNECTION_CONGESTED -> UniversalBleErrorCode.CONNECTION_FAILED
         BluetoothGatt.GATT_FAILURE -> UniversalBleErrorCode.FAILED
+        // GATT_ERROR (133): generic Android BLE stack error, often transient.
+        // Not exposed as a public constant in BluetoothGatt — it's the
+        // internal status code the stack returns when it can't give a
+        // more specific reason. Common on connect, read, and write.
+        // Surface as gattError so callers can retry vs. declare link dead.
+        133 -> UniversalBleErrorCode.GATT_ERROR
         0x01 -> UniversalBleErrorCode.INVALID_HANDLE
         0x04 -> UniversalBleErrorCode.INVALID_PDU
         0x09 -> UniversalBleErrorCode.OPERATION_IN_PROGRESS

@@ -338,30 +338,34 @@ enum UniversalBleErrorCode: Int {
   case operationTimeout = 34
   case operationCancelled = 35
   case operationInProgress = 36
-  case characteristicDoesNotSupportRead = 37
-  case characteristicDoesNotSupportWrite = 38
-  case characteristicDoesNotSupportWriteWithoutResponse = 39
-  case characteristicDoesNotSupportNotify = 40
-  case characteristicDoesNotSupportIndicate = 41
-  case notPaired = 42
-  case notPairable = 43
-  case alreadyPaired = 44
-  case pairingFailed = 45
-  case pairingCancelled = 46
-  case pairingTimeout = 47
-  case pairingNotAllowed = 48
-  case authenticationFailure = 49
-  case insufficientAuthentication = 50
-  case insufficientAuthorization = 51
-  case insufficientEncryption = 52
-  case insufficientKeySize = 53
-  case protectionLevelNotMet = 54
-  case accessDenied = 55
-  case unpairingFailed = 56
-  case alreadyUnpaired = 57
-  case scanFailed = 58
-  case stoppingScanInProgress = 59
-  case webBluetoothGloballyDisabled = 60
+  /// Android GATT_ERROR (status 133) — generic, often transient.
+  /// The raw GATT status code is included in the exception message.
+  /// Callers should retry once before declaring the link dead.
+  case gattError = 37
+  case characteristicDoesNotSupportRead = 38
+  case characteristicDoesNotSupportWrite = 39
+  case characteristicDoesNotSupportWriteWithoutResponse = 40
+  case characteristicDoesNotSupportNotify = 41
+  case characteristicDoesNotSupportIndicate = 42
+  case notPaired = 43
+  case notPairable = 44
+  case alreadyPaired = 45
+  case pairingFailed = 46
+  case pairingCancelled = 47
+  case pairingTimeout = 48
+  case pairingNotAllowed = 49
+  case authenticationFailure = 50
+  case insufficientAuthentication = 51
+  case insufficientAuthorization = 52
+  case insufficientEncryption = 53
+  case insufficientKeySize = 54
+  case protectionLevelNotMet = 55
+  case accessDenied = 56
+  case unpairingFailed = 57
+  case alreadyUnpaired = 58
+  case scanFailed = 59
+  case stoppingScanInProgress = 60
+  case webBluetoothGloballyDisabled = 61
 }
 
 /// Shared models & enums

@@ -1,3 +1,6 @@
+## 2.1.2
+* Add `gattError` to `UniversalBleErrorCode` — Android GATT status 133 (GATT_ERROR) is now surfaced as a distinct error code instead of collapsing to `unknownError`. Callers can distinguish a transient GATT-133 (retryable) from a permanent disconnect. The raw GATT status code is included in the exception message/details.
+
 ## 2.1.1
 * Android: GATT 133 retry — up to 3 attempts with 500ms→1000ms→1500ms backoff on ERROR_GATT disconnect. Common on older Android BLE stacks; retry often succeeds on the second attempt.
 * Add `connectionUpdateStream` to public API — unlike `connectionStream` which emits only bool, this stream emits full `(deviceId, isConnected, error)` record so callers can log native disconnect reason codes (e.g. 'GATT_CONN_TIMEOUT') for diagnostics.
