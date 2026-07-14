@@ -115,6 +115,8 @@ fun BluetoothGatt.removeCache() {
     knownGatts.remove(this.device.address)
 }
 
+fun allKnownGatts(): List<BluetoothGatt> = knownGatts.values.toList()
+
 
 fun Int.toAvailabilityState(): AvailabilityState {
     return when (this) {

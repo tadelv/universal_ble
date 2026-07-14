@@ -49,6 +49,10 @@ class BleCapabilities {
   /// Whether connection parameter update events are reported (Android API 26+).
   static bool supportsConnectionParametersUpdates =
       !_Platform.isWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// Whether clearGattCache() is supported (Android only).
+  static bool supportsClearGattCacheApi =
+      !_Platform.isWeb && defaultTargetPlatform == TargetPlatform.android;
 }
 
 class _Platform {

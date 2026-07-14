@@ -341,6 +341,37 @@ void main() {
       releaseCustom.complete();
     });
 
+    test('clearQueue surfaces a custom error to pending commands', () async {
+      final commandQueue = BleCommandQueue();
+      final release = Completer<void>();
+      final started = Completer<void>();
+
+      commandQueue.queueCommand(
+        () async {
+          started.complete();
+          await release.future;
+        },
+        queueId: 'tilta',
+      );
+      final pending = commandQueue.queueCommand(() async {}, queueId: 'tilta');
+
+      await started.future;
+      commandQueue.clearQueue('tilta', error: StateError('device gone'));
+
+      await expectLater(
+        pending,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'device gone',
+          ),
+        ),
+      );
+
+      release.complete();
+    });
+
     test('new commands recreate a cleared queue id', () async {
       final commandQueue = BleCommandQueue();
 

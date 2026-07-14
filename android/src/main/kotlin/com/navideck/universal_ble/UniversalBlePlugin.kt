@@ -63,10 +63,12 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val rssiResultFutureList = mutableListOf<RssiResultFuture>()
     private val autoConnectDevices = mutableSetOf<String>()
 
-    // GATT 133 retry tracking: per-device attempt counters.
-    // Reset on successful connect or non-133 disconnect.
-    private val gattRetryAttempts = mutableMapOf<String, Int>()
-    private val maxGattRetries = 3
+    // Disconnecting too soon after connectGatt can strand a connection the
+    // Android stack no longer tracks (no gatt handle to tear it down with).
+    // Enforce a minimum gap, like flutter_blue_plus' androidDelay.
+    // https://issuetracker.google.com/issues/37121040
+    private val connectTimestamps = mutableMapOf<String, Long>()
+    private val minConnectDisconnectGapMs = 2000L
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -291,6 +293,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         } else {
             remoteDevice.connectGatt(context, shouldAutoConnect, this)
         }
+        connectTimestamps[deviceId] = System.currentTimeMillis()
         gatt.saveCacheIfNeeded()
     }
 
@@ -302,6 +305,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             mainThreadHandler?.post {
                 callbackChannel?.onConnectionChanged(deviceId, false, null) {}
             }
+            return
+        }
+        val elapsed = System.currentTimeMillis() - (connectTimestamps[deviceId] ?: 0L)
+        val remaining = minConnectDisconnectGapMs - elapsed
+        if (remaining > 0) {
+            UniversalBleLogger.logDebug(
+                "Delaying disconnect of $deviceId by ${remaining}ms (connect-disconnect gap)"
+            )
+            mainThreadHandler?.postDelayed({ cleanConnection(gatt) }, remaining)
         } else {
             cleanConnection(gatt)
         }
@@ -347,6 +359,28 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             return
         }
         handler.requestBluetoothAdvertisePermission(callback)
+    }
+
+    override fun clearGattCache(deviceId: String) {
+        val gatt = deviceId.toBluetoothGatt()
+        try {
+            val refresh = gatt.javaClass.getMethod("refresh")
+            val result = refresh.invoke(gatt) as? Boolean ?: false
+            if (!result) {
+                throw createFlutterError(
+                    UniversalBleErrorCode.FAILED,
+                    "gatt.refresh() returned false"
+                )
+            }
+        } catch (e: FlutterError) {
+            throw e
+        } catch (e: Exception) {
+            throw createFlutterError(
+                UniversalBleErrorCode.FAILED,
+                "Failed to clear GATT cache",
+                e.toString()
+            )
+        }
     }
 
     override fun readRssi(deviceId: String, callback: (Result<Long>) -> Unit) {
@@ -1147,9 +1181,22 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     }
 
     private fun cleanConnection(gatt: BluetoothGatt) {
+        val deviceId = gatt.device.address
         gatt.removeCache()
         gatt.disconnect()
-        cleanUpConnection(gatt.device.address)
+        cleanUpConnection(deviceId)
+        // A connect attempt that never reached STATE_CONNECTED may get no
+        // onConnectionStateChange callback after disconnect(); close and
+        // report here or the GATT client leaks (Android caps them at 32,
+        // and exhaustion surfaces as GATT 133 elsewhere).
+        val state = bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
+        if (state != BluetoothProfile.STATE_CONNECTED) {
+            connectTimestamps.remove(deviceId)
+            gatt.close()
+            mainThreadHandler?.post {
+                callbackChannel?.onConnectionChanged(deviceId, false, null) {}
+            }
+        }
     }
 
     private fun onBondStateUpdate(deviceId: String, bonded: Boolean, error: String? = null) {
@@ -1160,9 +1207,38 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         }
     }
 
+    // With the adapter off, every connection and pending operation is dead.
+    // Android does not reliably deliver per-device callbacks when the adapter
+    // goes down, so fail them here and close the GATT clients — leaked
+    // clients (capped at 32 system-wide) later surface as GATT 133.
+    private fun cleanUpOnAdapterOff() {
+        for (gatt in allKnownGatts()) {
+            val deviceId = gatt.device.address
+            cleanUpConnection(deviceId)
+            connectTimestamps.remove(deviceId)
+            gatt.removeCache()
+            try {
+                gatt.close()
+            } catch (e: Exception) {
+                UniversalBleLogger.logError("Failed to close gatt for $deviceId: $e")
+            }
+            mainThreadHandler?.post {
+                callbackChannel?.onConnectionChanged(deviceId, false, "ADAPTER_OFF") {}
+            }
+        }
+        autoConnectDevices.clear()
+    }
+
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(
+                    BluetoothAdapter.EXTRA_STATE,
+                    BluetoothAdapter.ERROR
+                )
+                if (state == BluetoothAdapter.STATE_OFF) {
+                    cleanUpOnAdapterOff()
+                }
                 mainThreadHandler?.post {
                     callbackChannel?.onAvailabilityChanged(
                         bluetoothManager.adapter?.state?.toAvailabilityState()
@@ -1201,7 +1277,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanFailed(errorCode: Int) {
-            UniversalBleLogger.logError("OnScanFailed: ${errorCode.parseScanErrorMessage()}")
+            val message = errorCode.parseScanErrorMessage()
+            UniversalBleLogger.logError("OnScanFailed: $message")
+            mainThreadHandler?.post {
+                callbackChannel?.onScanFailed(errorCode.toLong(), message) {}
+            }
         }
 
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -1261,8 +1341,6 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         )
 
         if (newState == BluetoothGatt.STATE_CONNECTED) {
-            // Reset retry counter on successful connection
-            gattRetryAttempts.remove(gatt.device.address)
             mainThreadHandler?.post {
                 callbackChannel?.onConnectionChanged(
                     gatt.device.address, true, status.parseHciErrorCode()
@@ -1273,6 +1351,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             val shouldAutoConnect = autoConnectDevices.contains(deviceId)
 
             // Always clean up internal state (futures, etc.)
+            connectTimestamps.remove(deviceId)
             cleanUpConnection(deviceId)
 
             // Send connection changed callback
@@ -1282,39 +1361,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 ) {}
             }
 
-            // GATT 133 (ERROR_GATT) retry: common on older Android BLE stacks
-            // (e.g. some tablet SoCs). Retry up to maxGattRetries with
-            // increasing delay; reset counter on any non-133 disconnect or
-            // successful connect.
-            if (status == 133 && !shouldAutoConnect) {
-                val attempts = gattRetryAttempts.getOrDefault(deviceId, 0) + 1
-                if (attempts <= maxGattRetries) {
-                    gattRetryAttempts[deviceId] = attempts
-                    val delayMs = 500L * attempts
-                    UniversalBleLogger.logWarning(
-                        "GATT 133 on $deviceId (attempt $attempts/$maxGattRetries), " +
-                        "retrying in ${delayMs}ms"
-                    )
-                    mainThreadHandler?.postDelayed({
-                        // Re-connect without autoConnect — the original
-                        // connect() already registered the intent.
-                        val remoteDevice = bluetoothManager.adapter
-                            .getRemoteDevice(deviceId)
-                        remoteDevice.connectGatt(
-                            context, false, this@UniversalBlePlugin,
-                            BluetoothDevice.TRANSPORT_LE
-                        )?.saveCacheIfNeeded()
-                    }, delayMs)
-                } else {
-                    gattRetryAttempts.remove(deviceId)
-                    UniversalBleLogger.logWarning(
-                        "GATT 133 on $deviceId: exceeded $maxGattRetries retries"
-                    )
-                }
-            } else {
-                gattRetryAttempts.remove(deviceId)
-            }
-
+            // NOTE: no native GATT-133 retry here (removed 2026-07-14).
+            // The status is surfaced to Dart via onConnectionChanged
+            // (parseHciErrorCode → "gattError"); retry policy is the
+            // caller's. A native retry raced app-level reconnects with
+            // competing connectGatt clients — itself a 133 cause.
             if (!shouldAutoConnect) {
                 // Only close GATT resources when autoConnect is disabled
                 gatt.removeCache()

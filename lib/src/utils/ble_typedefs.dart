@@ -17,6 +17,8 @@ typedef OnValueChange =
 
 typedef OnScanResult = void Function(BleDevice scanResult);
 
+typedef OnScanFailure = void Function(ScanFailure failure);
+
 typedef OnAvailabilityChange = void Function(AvailabilityState state);
 
 typedef OnPairingStateChange = void Function(String deviceId, bool isPaired);

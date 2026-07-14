@@ -15,6 +15,12 @@ class UniversalBlePigeonChannel extends UniversalBlePlatform
   }
 
   final _channel = UniversalBlePlatformChannel();
+  UniversalBleAndroidChannel? _androidChannelRef;
+
+  UniversalBleAndroidChannel? get _androidChannel =>
+      (kIsWeb || defaultTargetPlatform != TargetPlatform.android)
+      ? null
+      : _androidChannelRef ??= UniversalBleAndroidChannel();
 
   @override
   Future<AvailabilityState> getBluetoothAvailabilityState() =>
@@ -197,6 +203,15 @@ class UniversalBlePigeonChannel extends UniversalBlePlatform
   Future<void> setLogLevel(BleLogLevel logLevel) =>
       _executeWithErrorHandling(() => _channel.setLogLevel(logLevel));
 
+  @override
+  Future<void> clearGattCache(String deviceId) {
+    final androidChannel = _androidChannel;
+    if (androidChannel == null) return super.clearGattCache(deviceId);
+    return _executeWithErrorHandling(
+      () => androidChannel.clearGattCache(deviceId),
+    );
+  }
+
   /// Executes a platform call with error handling
   /// Converts any errors to UniversalBleException
   Future<T> _executeWithErrorHandling<T>(Future<T> Function() future) async {
@@ -238,6 +253,10 @@ class UniversalBlePigeonChannel extends UniversalBlePlatform
     if (_bleFilter.matchesExclusionFilter(bleDevice)) return;
     updateScanResult(bleDevice);
   }
+
+  @override
+  void onScanFailed(int errorCode, String message) =>
+      updateScanFailure(ScanFailure(errorCode, message));
 
   @override
   void onValueChanged(

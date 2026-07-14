@@ -1811,6 +1811,10 @@ protocol UniversalBleCallbackChannelProtocol {
   func onAvailabilityChanged(state stateArg: AvailabilityState, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onPairStateChange(deviceId deviceIdArg: String, isPaired isPairedArg: Bool, error errorArg: String?, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onScanResult(result resultArg: UniversalBleScanResult, completion: @escaping (Result<Void, PigeonError>) -> Void)
+  /// Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+  /// [errorCode] is the raw platform code (e.g. Android 6 =
+  /// SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+  func onScanFailed(errorCode errorCodeArg: Int64, message messageArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onValueChanged(deviceId deviceIdArg: String, characteristicId characteristicIdArg: String, value valueArg: FlutterStandardTypedData, timestamp timestampArg: Int64?, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onConnectionChanged(deviceId deviceIdArg: String, connected connectedArg: Bool, error errorArg: String?, completion: @escaping (Result<Void, PigeonError>) -> Void)
   func onConnectionParametersUpdated(update updateArg: BleConnectionParametersUpdated, completion: @escaping (Result<Void, PigeonError>) -> Void)
@@ -1865,6 +1869,27 @@ class UniversalBleCallbackChannel: UniversalBleCallbackChannelProtocol {
     let channelName: String = "dev.flutter.pigeon.universal_ble.UniversalBleCallbackChannel.onScanResult\(messageChannelSuffix)"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
     channel.sendMessage([resultArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: String? = nilOrValue(listResponse[2])
+        completion(.failure(PigeonError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(()))
+      }
+    }
+  }
+  /// Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+  /// [errorCode] is the raw platform code (e.g. Android 6 =
+  /// SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+  func onScanFailed(errorCode errorCodeArg: Int64, message messageArg: String, completion: @escaping (Result<Void, PigeonError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.universal_ble.UniversalBleCallbackChannel.onScanFailed\(messageChannelSuffix)"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([errorCodeArg, messageArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {
         completion(.failure(createConnectionError(withChannelName: channelName)))
         return
@@ -2132,6 +2157,10 @@ class UniversalBlePeripheralChannelSetup {
 protocol UniversalBleAndroidChannel {
   func hasBluetoothAdvertisePermission() throws -> Bool
   func requestBluetoothAdvertisePermission(completion: @escaping (Result<Bool, Error>) -> Void)
+  /// Clears Android's GATT service cache for [deviceId] via the hidden
+  /// BluetoothGatt#refresh() method. Remedy for stale service caches on
+  /// misbehaving stacks or after peripheral firmware updates.
+  func clearGattCache(deviceId: String) throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -2167,6 +2196,24 @@ class UniversalBleAndroidChannelSetup {
       }
     } else {
       requestBluetoothAdvertisePermissionChannel.setMessageHandler(nil)
+    }
+    /// Clears Android's GATT service cache for [deviceId] via the hidden
+    /// BluetoothGatt#refresh() method. Remedy for stale service caches on
+    /// misbehaving stacks or after peripheral firmware updates.
+    let clearGattCacheChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.clearGattCache\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      clearGattCacheChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let deviceIdArg = args[0] as! String
+        do {
+          try api.clearGattCache(deviceId: deviceIdArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      clearGattCacheChannel.setMessageHandler(nil)
     }
   }
 }

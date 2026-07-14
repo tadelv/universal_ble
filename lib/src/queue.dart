@@ -27,9 +27,12 @@ class Queue {
     return completer.future;
   }
 
-  void dispose() {
+  /// Cancel all pending items and stop accepting new ones.
+  /// Pending items complete with [error], or a generic
+  /// `Queue Cancelled` exception when none is given.
+  void dispose([Object? error]) {
     for (final item in _nextCycle) {
-      item.completer.completeError(Exception('Queue Cancelled'));
+      item.completer.completeError(error ?? Exception('Queue Cancelled'));
     }
     _nextCycle.removeWhere((item) => item.completer.isCompleted);
     _isCancelled = true;

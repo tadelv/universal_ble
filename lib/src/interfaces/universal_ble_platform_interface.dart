@@ -8,6 +8,7 @@ import 'package:universal_ble/universal_ble.dart';
 abstract class UniversalBlePlatform {
   // Do not use these directly to push updates
   OnScanResult? onScanResultUpdate;
+  OnScanFailure? onScanFailure;
   OnConnectionChange? onConnectionChange;
   OnValueChange? onValueChange;
   OnAvailabilityChange? onAvailabilityChange;
@@ -18,6 +19,9 @@ abstract class UniversalBlePlatform {
   _lastConnectionParametersMap = {};
 
   final _scanStreamController = UniversalBleStreamController<BleDevice>();
+
+  final _scanFailureStreamController =
+      UniversalBleStreamController<ScanFailure>();
 
   final bleConnectionUpdateStreamController =
       UniversalBleStreamController<
@@ -120,8 +124,21 @@ abstract class UniversalBlePlatform {
 
   bool receivesAdvertisements(String deviceId) => true;
 
+  /// Clears the platform's GATT service cache for [deviceId].
+  /// Only supported on Android; see [BleCapabilities.supportsClearGattCacheApi].
+  Future<void> clearGattCache(String deviceId) async {
+    throw UniversalBleException(
+      code: UniversalBleErrorCode.notSupported,
+      message: "clearGattCache is not supported on this platform",
+    );
+  }
+
   /// Streams
   Stream<BleDevice> get scanStream => _scanStreamController.stream;
+
+  /// Platform scan failures (currently reported on Android only).
+  Stream<ScanFailure> get scanFailureStream =>
+      _scanFailureStreamController.stream;
 
   Stream<AvailabilityState> get availabilityStream =>
       _availabilityStreamController.stream;
@@ -163,6 +180,14 @@ abstract class UniversalBlePlatform {
 
     try {
       onScanResultUpdate?.call(bleDevice);
+    } catch (_) {}
+  }
+
+  void updateScanFailure(ScanFailure failure) {
+    _scanFailureStreamController.add(failure);
+
+    try {
+      onScanFailure?.call(failure);
     } catch (_) {}
   }
 

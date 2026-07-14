@@ -1154,6 +1154,14 @@ class UniversalBleCallbackChannel {
     const UniversalBleScanResult& result,
     std::function<void(void)>&& on_success,
     std::function<void(const FlutterError&)>&& on_error);
+  // Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+  // [errorCode] is the raw platform code (e.g. Android 6 =
+  // SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+  void OnScanFailed(
+    int64_t error_code,
+    const std::string& message,
+    std::function<void(void)>&& on_success,
+    std::function<void(const FlutterError&)>&& on_error);
   void OnValueChanged(
     const std::string& device_id,
     const std::string& characteristic_id,
@@ -1232,6 +1240,10 @@ class UniversalBleAndroidChannel {
   virtual ~UniversalBleAndroidChannel() {}
   virtual ErrorOr<bool> HasBluetoothAdvertisePermission() = 0;
   virtual void RequestBluetoothAdvertisePermission(std::function<void(ErrorOr<bool> reply)> result) = 0;
+  // Clears Android's GATT service cache for [deviceId] via the hidden
+  // BluetoothGatt#refresh() method. Remedy for stale service caches on
+  // misbehaving stacks or after peripheral firmware updates.
+  virtual std::optional<FlutterError> ClearGattCache(const std::string& device_id) = 0;
 
   // The codec used by UniversalBleAndroidChannel.
   static const ::flutter::StandardMessageCodec& GetCodec();

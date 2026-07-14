@@ -1902,6 +1902,11 @@ abstract class UniversalBleCallbackChannel {
 
   void onScanResult(UniversalBleScanResult result);
 
+  /// Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+  /// [errorCode] is the raw platform code (e.g. Android 6 =
+  /// SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+  void onScanFailed(int errorCode, String message);
+
   void onValueChanged(
     String deviceId,
     String characteristicId,
@@ -1988,6 +1993,32 @@ abstract class UniversalBleCallbackChannel {
               args[0]! as UniversalBleScanResult;
           try {
             api.onScanResult(arg_result);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
+          }
+        });
+      }
+    }
+    {
+      final pigeonVar_channel = BasicMessageChannel<Object?>(
+        'dev.flutter.pigeon.universal_ble.UniversalBleCallbackChannel.onScanFailed$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
+      if (api == null) {
+        pigeonVar_channel.setMessageHandler(null);
+      } else {
+        pigeonVar_channel.setMessageHandler((Object? message) async {
+          final List<Object?> args = message! as List<Object?>;
+          final int arg_errorCode = args[0]! as int;
+          final String arg_message = args[1]! as String;
+          try {
+            api.onScanFailed(arg_errorCode, arg_message);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
@@ -2389,6 +2420,29 @@ class UniversalBleAndroidChannel {
       isNullValid: false,
     );
     return pigeonVar_replyValue! as bool;
+  }
+
+  /// Clears Android's GATT service cache for [deviceId] via the hidden
+  /// BluetoothGatt#refresh() method. Remedy for stale service caches on
+  /// misbehaving stacks or after peripheral firmware updates.
+  Future<void> clearGattCache(String deviceId) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.clearGattCache$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[deviceId],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 }
 

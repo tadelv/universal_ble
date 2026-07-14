@@ -2123,6 +2123,28 @@ class UniversalBleCallbackChannel(private val binaryMessenger: BinaryMessenger, 
       } 
     }
   }
+  /**
+   * Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+   * [errorCode] is the raw platform code (e.g. Android 6 =
+   * SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+   */
+  fun onScanFailed(errorCodeArg: Long, messageArg: String, callback: (Result<Unit>) -> Unit)
+{
+    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+    val channelName = "dev.flutter.pigeon.universal_ble.UniversalBleCallbackChannel.onScanFailed$separatedMessageChannelSuffix"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(errorCodeArg, messageArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(UniversalBlePigeonUtils.createConnectionError(channelName)))
+      } 
+    }
+  }
   fun onValueChanged(deviceIdArg: String, characteristicIdArg: String, valueArg: ByteArray, timestampArg: Long?, callback: (Result<Unit>) -> Unit)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -2407,6 +2429,12 @@ interface UniversalBlePeripheralChannel {
 interface UniversalBleAndroidChannel {
   fun hasBluetoothAdvertisePermission(): Boolean
   fun requestBluetoothAdvertisePermission(callback: (Result<Boolean>) -> Unit)
+  /**
+   * Clears Android's GATT service cache for [deviceId] via the hidden
+   * BluetoothGatt#refresh() method. Remedy for stale service caches on
+   * misbehaving stacks or after peripheral firmware updates.
+   */
+  fun clearGattCache(deviceId: String)
 
   companion object {
     /** The codec used by UniversalBleAndroidChannel. */
@@ -2445,6 +2473,24 @@ interface UniversalBleAndroidChannel {
                 reply.reply(UniversalBlePigeonUtils.wrapResult(data))
               }
             }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.clearGattCache$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val deviceIdArg = args[0] as String
+            val wrapped: List<Any?> = try {
+              api.clearGattCache(deviceIdArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              UniversalBlePigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
           }
         } else {
           channel.setMessageHandler(null)

@@ -79,12 +79,12 @@ class BleCommandQueue {
     return queue;
   }
 
-  void clearQueue(String? id) {
+  void clearQueue(String? id, {Object? error}) {
     if (id == null) {
-      _queueMap.forEach((k, v) => v.dispose());
+      _queueMap.forEach((k, v) => v.dispose(error));
       _queueMap.clear();
     } else {
-      _queueMap[id]?.dispose();
+      _queueMap[id]?.dispose(error);
       _queueMap.remove(id);
     }
   }

@@ -2,6 +2,7 @@ export 'package:universal_ble/src/models/manufacturer_data.dart';
 export 'package:universal_ble/src/models/platform_config.dart';
 export 'package:universal_ble/src/models/queue_type.dart';
 export 'package:universal_ble/src/models/ble_uuid_parser.dart';
+export 'package:universal_ble/src/models/scan_failure.dart';
 export 'package:universal_ble/src/models/scan_filter.dart';
 export 'package:universal_ble/src/models/ble_service.dart';
 export 'package:universal_ble/src/models/ble_device.dart';

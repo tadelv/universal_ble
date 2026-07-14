@@ -418,6 +418,11 @@ abstract class UniversalBleCallbackChannel {
 
   void onScanResult(UniversalBleScanResult result);
 
+  /// Scan failed to start or aborted (Android: ScanCallback.onScanFailed).
+  /// [errorCode] is the raw platform code (e.g. Android 6 =
+  /// SCAN_FAILED_SCANNING_TOO_FREQUENTLY), [message] its symbolic name.
+  void onScanFailed(int errorCode, String message);
+
   void onValueChanged(
     String deviceId,
     String characteristicId,
@@ -476,6 +481,11 @@ abstract class UniversalBleAndroidChannel {
 
   @async
   bool requestBluetoothAdvertisePermission();
+
+  /// Clears Android's GATT service cache for [deviceId] via the hidden
+  /// BluetoothGatt#refresh() method. Remedy for stale service caches on
+  /// misbehaving stacks or after peripheral firmware updates.
+  void clearGattCache(String deviceId);
 }
 
 /// Native -> Flutter (peripheral)

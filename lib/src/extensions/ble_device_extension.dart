@@ -25,8 +25,8 @@ extension BleDeviceExtension on BleDevice {
       );
 
   /// Disconnects from the device.
-  Future<void> disconnect({Duration? timeout, String? queueId}) =>
-      UniversalBle.disconnect(deviceId, timeout: timeout, queueId: queueId);
+  Future<void> disconnect({Duration? timeout}) =>
+      UniversalBle.disconnect(deviceId, timeout: timeout);
 
   /// Requests an MTU (Maximum Transmission Unit) value for the connection.
   ///

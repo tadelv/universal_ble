@@ -10,12 +10,35 @@ import 'package:universal_ble/universal_ble.dart';
 
 class UniversalBle {
   /// Get platform specific implementation.
-  static UniversalBlePlatform _platform = _defaultPlatform();
+  static UniversalBlePlatform _platform = _wireQueueDrain(_defaultPlatform());
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue();
+  static StreamSubscription? _queueDrainSubscription;
 
   /// Set custom platform specific implementation (e.g. for testing).
   static void setInstance(UniversalBlePlatform instance) =>
-      _platform = instance;
+      _platform = _wireQueueDrain(instance);
+
+  /// Drain a device's pending queued commands as soon as it disconnects.
+  /// Pending commands are doomed once the link is gone — failing them
+  /// immediately (instead of letting each burn its own timeout) keeps the
+  /// queue from head-of-line-blocking recovery. Only queues keyed by
+  /// [deviceId] are affected (i.e. [QueueType.perDevice]); the global queue
+  /// and custom [queueId] queues are left untouched.
+  static UniversalBlePlatform _wireQueueDrain(UniversalBlePlatform platform) {
+    _queueDrainSubscription?.cancel();
+    _queueDrainSubscription = platform.bleConnectionUpdateStreamController.stream
+        .where((e) => !e.isConnected)
+        .listen((e) {
+      _bleCommandQueue.clearQueue(
+        e.deviceId,
+        error: UniversalBleException(
+          code: UniversalBleErrorCode.deviceDisconnected,
+          message: "Command cancelled: device disconnected",
+        ),
+      );
+    });
+    return platform;
+  }
 
   /// Set global timeout for all commands.
   /// Default timeout is 10 seconds.
@@ -45,6 +68,15 @@ class UniversalBle {
 
   /// Scan Stream
   static Stream<BleDevice> get scanStream => _platform.scanStream;
+
+  /// Platform scan failures (currently reported on Android only).
+  ///
+  /// Notably [ScanFailureReason.scanningTooFrequently]: Android throttles
+  /// apps that start more than 5 scans per 30s and silently delivers no
+  /// results — without listening here that is indistinguishable from an
+  /// empty neighborhood.
+  static Stream<ScanFailure> get scanFailureStream =>
+      _platform.scanFailureStream;
 
   /// Bluetooth availability state stream
   static Stream<AvailabilityState> get availabilityStream =>
@@ -178,17 +210,34 @@ class UniversalBle {
           completer.completeError(ConnectionException(error));
         });
 
-    if (!await completer.future.timeout(timeout)) {
-      throw ConnectionException("Failed to connect");
+    try {
+      if (!await completer.future.timeout(timeout)) {
+        throw ConnectionException("Failed to connect");
+      }
+    } on TimeoutException {
+      // Cancel the still-pending native connect attempt. Without this the
+      // OS can complete the connection later with nobody listening — a
+      // stranded ("zombie") link the app can neither use nor tear down.
+      try {
+        await _platform.disconnect(deviceId);
+      } catch (e) {
+        UniversalLogger.logError(
+          "Cancelling timed-out connect to $deviceId failed: $e",
+        );
+      }
+      rethrow;
     }
   }
 
   /// Disconnect from a device.
   /// Get notified of connection state changes in [onConnectionChange] listener.
+  ///
+  /// Not queued: teardown must never wait behind pending (possibly stalled)
+  /// commands of the device being torn down. Pending queued commands for the
+  /// device are cancelled when the disconnect event arrives.
   static Future<void> disconnect(
     String deviceId, {
     Duration? timeout,
-    String? queueId,
   }) async {
     timeout ??= const Duration(seconds: 60);
     BleConnectionState? connectionState;
@@ -204,13 +253,9 @@ class UniversalBle {
         timeout: timeout,
       );
 
-      await _bleCommandQueue
-          .queueCommand(
-            () => _platform.disconnect(deviceId),
-            timeout: timeout,
-            deviceId: deviceId,
-            queueId: queueId,
-          )
+      await _platform
+          .disconnect(deviceId)
+          .timeout(timeout)
           .catchError((error) {
             if (completer.isCompleted) return;
             completer.completeError(ConnectionException(error));
@@ -597,6 +642,26 @@ class UniversalBle {
     );
   }
 
+  /// Clear Android's GATT service cache for a device.
+  ///
+  /// Remedy for stale service caches on misbehaving stacks or after
+  /// peripheral firmware updates (wrong/missing services on discovery).
+  /// Only supported on Android — check
+  /// [BleCapabilities.supportsClearGattCacheApi]; other platforms throw
+  /// [UniversalBleException] with [UniversalBleErrorCode.notSupported].
+  static Future<void> clearGattCache(
+    String deviceId, {
+    Duration? timeout,
+    String? queueId,
+  }) async {
+    return await _bleCommandQueue.queueCommand(
+      () => _platform.clearGattCache(deviceId),
+      timeout: timeout,
+      deviceId: deviceId,
+      queueId: queueId,
+    );
+  }
+
   /// Clear a queue.
   /// Use [BleCommandQueue.globalQueueId] to clear the global queue.
   /// To clear the queue of a specific device, use `deviceId` as [id].
@@ -898,6 +963,10 @@ class UniversalBle {
   /// Get scan results.
   static set onScanResult(OnScanResult? onScanResult) =>
       _platform.onScanResultUpdate = onScanResult;
+
+  /// Get scan failures (see [scanFailureStream]).
+  static set onScanFailure(OnScanFailure? onScanFailure) =>
+      _platform.onScanFailure = onScanFailure;
 
   /// Get connection state changes.
   static set onConnectionChange(OnConnectionChange? onConnectionChange) =>
