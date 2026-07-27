@@ -69,7 +69,10 @@ void main() {
     });
     group('Fails', () {
       test('Invalid UUID length is less than 4', () {
-        expect(() => BleUuidParser.string('123'), throwsFormatException);
+        expect(
+          () => BleUuidParser.string('123'),
+          throwsFormatException,
+        );
       });
 
       test('Invalid UUID without dashes and short length', () {
@@ -101,7 +104,10 @@ void main() {
       });
 
       test('Invalid UUID is too short for 128 bits', () {
-        expect(() => BleUuidParser.string('01'), throwsFormatException);
+        expect(
+          () => BleUuidParser.string('01'),
+          throwsFormatException,
+        );
 
         expect(
           () => BleUuidParser.string('0000180a-0000-1000-8000-00805f9b34f'),
@@ -150,11 +156,17 @@ void main() {
     });
     group('Fails', () {
       test('Invalid UUID is 8 bits', () {
-        expect(() => BleUuidParser.number(0x18), throwsFormatException);
+        expect(
+          () => BleUuidParser.number(0x18),
+          throwsFormatException,
+        );
       });
 
       test('Invalid UUID is more than 32 bits', () {
-        expect(() => BleUuidParser.number(0x180A01), throwsFormatException);
+        expect(
+          () => BleUuidParser.number(0x180A01),
+          throwsFormatException,
+        );
       });
     });
   });
@@ -163,24 +175,23 @@ void main() {
     group('Succeeds', () {
       test('Identical UUIDs', () {
         expect(
-          BleUuidParser.compareStrings(
-            '0000180a-0000-1000-8000-00805f9b34fb',
-            '0000180a-0000-1000-8000-00805f9b34fb',
-          ),
+          BleUuidParser.compareStrings('0000180a-0000-1000-8000-00805f9b34fb',
+              '0000180a-0000-1000-8000-00805f9b34fb'),
           isTrue,
         );
       });
 
       test('UUIDs with different case', () {
-        expect(BleUuidParser.compareStrings('180A', '180a'), isTrue);
+        expect(
+          BleUuidParser.compareStrings('180A', '180a'),
+          isTrue,
+        );
       });
 
       test('16-bit and 128-bit UUIDs', () {
         expect(
           BleUuidParser.compareStrings(
-            '0000180a-0000-1000-8000-00805f9b34fb',
-            '180a',
-          ),
+              '0000180a-0000-1000-8000-00805f9b34fb', '180a'),
           isTrue,
         );
       });
@@ -188,9 +199,7 @@ void main() {
       test('16-bit and 128-bit UUIDs without dashes', () {
         expect(
           BleUuidParser.compareStrings(
-            '0000180A00001000800000805F9B34FB',
-            '180a',
-          ),
+              '0000180A00001000800000805F9B34FB', '180a'),
           isTrue,
         );
       });
@@ -198,9 +207,7 @@ void main() {
       test('32-bit and 128-bit UUIDs', () {
         expect(
           BleUuidParser.compareStrings(
-            '0000180A',
-            '0000180a-0000-1000-8000-00805f9b34fb',
-          ),
+              '0000180A', '0000180a-0000-1000-8000-00805f9b34fb'),
           isTrue,
         );
       });
@@ -208,15 +215,16 @@ void main() {
 
     group('Fails with', () {
       test('Different UUIDs', () {
-        expect(BleUuidParser.compareStrings('180A', '180B'), isFalse);
+        expect(
+          BleUuidParser.compareStrings('180A', '180B'),
+          isFalse,
+        );
       });
 
       test('Different UUIDs with different formats', () {
         expect(
           BleUuidParser.compareStrings(
-            '0000180A',
-            '0000180b-0000-1000-8000-00805f9b34fb',
-          ),
+              '0000180A', '0000180b-0000-1000-8000-00805f9b34fb'),
           isFalse,
         );
       });

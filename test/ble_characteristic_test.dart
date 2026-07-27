@@ -26,9 +26,8 @@ void main() {
   group('BleCharacteristic Tests', () {
     test("DiscoverServices test", () async {
       debugPrint("Discovering services");
-      List<BleService> services = await UniversalBle.discoverServices(
-        mockDeviceId,
-      );
+      List<BleService> services =
+          await UniversalBle.discoverServices(mockDeviceId);
       expect(services.length, 1);
 
       BleService service = services.first;
@@ -89,19 +88,13 @@ class _UniversalBleMock extends UniversalBlePlatformMock {
 
   @override
   Future<List<BleService>> discoverServices(
-    String deviceId,
-    bool withDescriptors,
-  ) async {
+      String deviceId, bool withDescriptors) async {
     return <BleService>[mockBleService];
   }
 
   @override
-  Future<void> setNotifiable(
-    String deviceId,
-    String service,
-    String characteristic,
-    BleInputProperty bleInputProperty,
-  ) async {
+  Future<void> setNotifiable(String deviceId, String service,
+      String characteristic, BleInputProperty bleInputProperty) async {
     if (bleInputProperty == BleInputProperty.disabled) {
       notifierTimer?.cancel();
       notifierTimer = null;
@@ -120,22 +113,18 @@ class _UniversalBleMock extends UniversalBlePlatformMock {
 
   @override
   Future<void> writeValue(
-    String deviceId,
-    String service,
-    String characteristic,
-    Uint8List value,
-    BleOutputProperty bleOutputProperty,
-  ) async {
+      String deviceId,
+      String service,
+      String characteristic,
+      Uint8List value,
+      BleOutputProperty bleOutputProperty) async {
     charValue = value;
   }
 
   @override
   Future<Uint8List> readValue(
-    String deviceId,
-    String service,
-    String characteristic, {
-    Duration? timeout,
-  }) async {
+      String deviceId, String service, String characteristic,
+      {Duration? timeout}) async {
     return charValue ?? Uint8List(0);
   }
 

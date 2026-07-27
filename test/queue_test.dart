@@ -61,6 +61,34 @@ void main() {
       await expectLater(future, throwsA(isA<StateError>()));
     });
 
+    test('synchronous closure failure reports error and cleans up', () async {
+      final queue = Queue();
+
+      final failed = queue.add<int>(() {
+        throw StateError('sync-boom');
+      });
+
+      await expectLater(failed, throwsA(isA<StateError>()));
+
+      // No unresolved operations should linger after a sync throw.
+      final result = queue.dispose();
+      expect(result.activeOperations, 0);
+      expect(result.pendingCancelled, 0);
+    });
+
+    test(
+      'synchronous closure failure allows next command to proceed',
+      () async {
+        final queue = Queue();
+
+        // First command throws synchronously — swallow the error.
+        queue.add<int>(() => throw StateError('boom')).catchError((_) => 0);
+
+        // Second command must still execute normally.
+        expect(await queue.add(() async => 42), 42);
+      },
+    );
+
     test('times out slow commands', () async {
       final queue = Queue();
 

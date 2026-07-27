@@ -28,12 +28,9 @@ void main() {
       );
 
       expect(
-        filterUtil.manufacturerDataMatches(
-          scanFilter.withManufacturerData,
-          device,
-        ),
-        true,
-      );
+          filterUtil.manufacturerDataMatches(
+              scanFilter.withManufacturerData, device),
+          true);
     });
 
     test('should not match when device has no manufacturer data', () {
@@ -53,43 +50,36 @@ void main() {
       );
 
       expect(
-        filterUtil.manufacturerDataMatches(
-          scanFilter.withManufacturerData,
-          device,
-        ),
-        false,
-      );
+          filterUtil.manufacturerDataMatches(
+              scanFilter.withManufacturerData, device),
+          false);
     });
 
     test(
-      'should match when company identifiers are equal and no payload prefix',
-      () {
-        scanFilter = ScanFilter(
-          withNamePrefix: [],
-          withServices: [],
-          withManufacturerData: [
-            ManufacturerDataFilter(companyIdentifier: 0x004C),
-          ],
-        );
+        'should match when company identifiers are equal and no payload prefix',
+        () {
+      scanFilter = ScanFilter(
+        withNamePrefix: [],
+        withServices: [],
+        withManufacturerData: [
+          ManufacturerDataFilter(companyIdentifier: 0x004C),
+        ],
+      );
 
-        device = BleDevice(
-          deviceId: '1',
-          name: 'Test Device',
-          manufacturerDataList: [
-            ManufacturerData(0x004C, Uint8List.fromList([])),
-          ],
-          services: [],
-        );
+      device = BleDevice(
+        deviceId: '1',
+        name: 'Test Device',
+        manufacturerDataList: [
+          ManufacturerData(0x004C, Uint8List.fromList([])),
+        ],
+        services: [],
+      );
 
-        expect(
+      expect(
           filterUtil.manufacturerDataMatches(
-            scanFilter.withManufacturerData,
-            device,
-          ),
-          true,
-        );
-      },
-    );
+              scanFilter.withManufacturerData, device),
+          true);
+    });
 
     group('Payload Prefix Tests', () {
       test('should match when payload prefix matches start of payload', () {
@@ -114,12 +104,9 @@ void main() {
         );
 
         expect(
-          filterUtil.manufacturerDataMatches(
-            scanFilter.withManufacturerData,
-            device,
-          ),
-          true,
-        );
+            filterUtil.manufacturerDataMatches(
+                scanFilter.withManufacturerData, device),
+            true);
       });
 
       test('should match with multiple manufacturer data entries', () {
@@ -145,12 +132,9 @@ void main() {
         );
 
         expect(
-          filterUtil.manufacturerDataMatches(
-            scanFilter.withManufacturerData,
-            device,
-          ),
-          true,
-        );
+            filterUtil.manufacturerDataMatches(
+                scanFilter.withManufacturerData, device),
+            true);
       });
     });
 
@@ -178,12 +162,9 @@ void main() {
         );
 
         expect(
-          filterUtil.manufacturerDataMatches(
-            scanFilter.withManufacturerData,
-            device,
-          ),
-          true,
-        );
+            filterUtil.manufacturerDataMatches(
+                scanFilter.withManufacturerData, device),
+            true);
       });
 
       test('should not match when masked values are different', () {
@@ -209,12 +190,9 @@ void main() {
         );
 
         expect(
-          filterUtil.manufacturerDataMatches(
-            scanFilter.withManufacturerData,
-            device,
-          ),
-          false,
-        );
+            filterUtil.manufacturerDataMatches(
+                scanFilter.withManufacturerData, device),
+            false);
       });
     });
   });

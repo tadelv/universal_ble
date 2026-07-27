@@ -154,9 +154,7 @@ abstract class UniversalBlePlatform {
   Stream<bool> connectionStream(String deviceId) {
     final target = deviceId.toLowerCase();
     return bleConnectionUpdateStreamController.stream
-        .where(
-          (e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target,
-        )
+        .where((e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target)
         .map((e) => e.isConnected);
   }
 
@@ -164,7 +162,7 @@ abstract class UniversalBlePlatform {
   /// (HCI error code string, e.g. "GATT_CONN_TIMEOUT") when the
   /// connection drops. The error is `null` on connect.
   Stream<({String deviceId, bool isConnected, String? error})>
-  connectionUpdateStream(String deviceId) {
+      connectionUpdateStream(String deviceId) {
     final target = deviceId.toLowerCase();
     return bleConnectionUpdateStreamController.stream.where(
       (e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target,
@@ -179,8 +177,7 @@ abstract class UniversalBlePlatform {
     characteristicId = BleUuidParser.string(characteristicId);
     return _valueStreamController.stream
         .where((e) {
-          return (e.deviceId == deviceId ||
-                  e.deviceId.toLowerCase() == target) &&
+          return (e.deviceId == deviceId || e.deviceId.toLowerCase() == target) &&
               e.characteristicId == characteristicId;
         })
         .map((e) => e.value);
@@ -189,9 +186,7 @@ abstract class UniversalBlePlatform {
   Stream<bool> pairingStateStream(String deviceId) {
     final target = deviceId.toLowerCase();
     return _pairStateStreamController.stream
-        .where(
-          (e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target,
-        )
+        .where((e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target)
         .map((e) => e.isPaired);
   }
 

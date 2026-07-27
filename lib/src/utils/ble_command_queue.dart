@@ -28,12 +28,16 @@ class BleCommandQueue {
       );
     }
     return switch (queueType) {
-      QueueType.global => _queue(
-        queueId,
-      ).add(command, timeoutDuration, coalesceKey),
-      QueueType.perDevice => _queue(
-        queueId ?? deviceId?.toLowerCase(),
-      ).add(command, timeoutDuration, coalesceKey),
+      QueueType.global => _queue(queueId).add(
+        command,
+        timeoutDuration,
+        coalesceKey,
+      ),
+      QueueType.perDevice => _queue(queueId ?? deviceId?.toLowerCase()).add(
+        command,
+        timeoutDuration,
+        coalesceKey,
+      ),
       QueueType.none => command().timeout(timeoutDuration),
     };
   }
@@ -45,10 +49,16 @@ class BleCommandQueue {
     String? coalesceKey,
   }) {
     return switch (queueType) {
-      QueueType.global => _queue(queueId).add(command, null, coalesceKey),
-      QueueType.perDevice => _queue(
-        queueId ?? deviceId?.toLowerCase(),
-      ).add(command, null, coalesceKey),
+      QueueType.global => _queue(queueId).add(
+        command,
+        null,
+        coalesceKey,
+      ),
+      QueueType.perDevice => _queue(queueId ?? deviceId?.toLowerCase()).add(
+        command,
+        null,
+        coalesceKey,
+      ),
       QueueType.none => command(),
     };
   }

@@ -93,8 +93,9 @@ class Queue {
 
 /// Detachable handle that tracks one in-flight operation.
 ///
-/// The async frame of [runUnderlying] captures only this token and a local
-/// copy of the command closure — never the full [_QueuedFuture] or [Queue].
+/// The tracking async frame ([_QueuedFuture._trackUnderlying]) captures only
+/// the already-created [Future] and this token — never the command closure,
+/// [_QueuedFuture], or [Queue].
 ///
 /// After [detach] the token becomes a no-op; completing the underlying native
 /// future does not reach back into a queue that has already been disposed.
@@ -135,24 +136,51 @@ class _QueuedFuture<T> {
     this.coalesceKey,
   }) : _closure = closure;
 
+  /// Track [underlying] completion without capturing the command closure.
+  ///
+  /// The async frame of this helper retains only the already-created
+  /// [Future] and the detachable [_OperationToken]. It never sees
+  /// [_QueuedFuture], the command closure, the [Queue], or queue
+  /// callbacks.
+  static Future<T> _trackUnderlying<T>(
+    Future<T> underlying,
+    _OperationToken? token,
+  ) async {
+    try {
+      return await underlying;
+    } finally {
+      token?.underlyingComplete();
+    }
+  }
+
   Future<void> execute() async {
     final token = _token;
-    final closure = _closure;
+    var closure = _closure;
+    _closure = null;
 
-    Future<T> runUnderlying() async {
-      try {
-        return await closure!();
-      } finally {
-        token?.underlyingComplete();
+    // Invoke the closure *before* entering any long-running tracking async
+    // frame.  A synchronous throw is caught here so the completer and token
+    // are cleaned up without leaving a dangling async frame.
+    late final Future<T> underlying;
+    try {
+      underlying = closure!();
+    } catch (e, stack) {
+      token?.underlyingComplete();
+      token?.dartComplete();
+      if (!completer.isCompleted) {
+        completer.completeError(e, stack);
       }
+      return;
+    } finally {
+      closure = null;
     }
 
     try {
       T result;
       if (timeout != null) {
-        result = await runUnderlying().timeout(timeout!);
+        result = await _trackUnderlying(underlying, token).timeout(timeout!);
       } else {
-        result = await runUnderlying();
+        result = await _trackUnderlying(underlying, token);
       }
       if (!completer.isCompleted) {
         if (result != null) {
@@ -167,7 +195,6 @@ class _QueuedFuture<T> {
         completer.completeError(e, stack);
       }
     } finally {
-      _closure = null;
       token?.dartComplete();
     }
   }
