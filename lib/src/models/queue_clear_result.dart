@@ -4,8 +4,27 @@ import 'package:universal_ble/src/universal_ble.g.dart';
 /// Why pending operations were cancelled by a queue clear.
 enum QueueClearReason { defaultCancellation, suppliedError }
 
-/// The queue's lifecycle state after a clear attempt.
-enum QueueLifecycleState { cleared, notFound }
+/// A queue generation's lifecycle state.
+enum QueueLifecycleState { running, faulted, cleared, notFound }
+
+/// Current payload-free diagnostics for one queue generation.
+class QueueDiagnostics {
+  final String queueId;
+  final QueueType queueType;
+  final int pendingOperations;
+
+  /// Already-dispatched operations whose native Futures remain unresolved.
+  final int activeOperations;
+  final QueueLifecycleState state;
+
+  const QueueDiagnostics({
+    required this.queueId,
+    required this.queueType,
+    required this.pendingOperations,
+    required this.activeOperations,
+    required this.state,
+  });
+}
 
 /// Structured, payload-free diagnostics for one queue clear.
 class QueueClearResult {

@@ -15,8 +15,16 @@ class UniversalBle {
   static StreamSubscription? _queueDrainSubscription;
 
   /// Set custom platform specific implementation (e.g. for testing).
-  static void setInstance(UniversalBlePlatform instance) =>
-      _platform = _wireQueueDrain(instance);
+  static void setInstance(UniversalBlePlatform instance) {
+    _bleCommandQueue.clearQueue(
+      null,
+      error: UniversalBleException(
+        code: UniversalBleErrorCode.operationCancelled,
+        message: 'Command cancelled: BLE platform instance replaced',
+      ),
+    );
+    _platform = _wireQueueDrain(instance);
+  }
 
   /// Drain a device's pending queued commands as soon as it disconnects.
   /// Pending commands are doomed once the link is gone — failing them
@@ -60,7 +68,8 @@ class UniversalBle {
   ///
   /// [QueueType.global] will execute commands of all devices in a single queue.
   /// [QueueType.perDevice] will execute command of each device in separate queues.
-  /// [QueueType.none] will execute all commands in parallel.
+  /// [QueueType.none] will execute all commands in parallel. Because it creates
+  /// no queue, it cannot block later commands after a native operation timeout.
   static set queueType(QueueType queueType) {
     _bleCommandQueue.queueType = queueType;
     UniversalLogger.logInfo('Queue ${queueType.name}');
@@ -672,11 +681,20 @@ class UniversalBle {
     );
   }
 
+  /// Return current payload-free state for one queue generation.
+  ///
+  /// A [QueueLifecycleState.faulted] queue rejects commands until it is
+  /// explicitly cleared. [QueueDiagnostics.activeOperations] counts native
+  /// Futures that remain unresolved after their Dart wrappers completed.
+  static QueueDiagnostics getQueueDiagnostics(String id) =>
+      _bleCommandQueue.getQueueDiagnostics(id);
+
   /// Clear a queue using the default cancellation exception.
   /// Use [BleCommandQueue.globalQueueId] to clear the global queue.
   /// To clear the queue of a specific device, use `deviceId` as [id].
   /// To clear a custom queue, pass the same `queueId` string used when enqueueing commands.
-  /// If no [id] is provided, all queues will be cleared.
+  /// If no [id] is provided, all queues will be cleared. Clearing a faulted
+  /// queue removes that generation; the next command creates a clean one.
   ///
   /// Only pending commands are completed; an already-running BLE operation and
   /// its underlying native [Future] are not cancelled.

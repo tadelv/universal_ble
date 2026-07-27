@@ -97,7 +97,32 @@ void main() {
         const Duration(milliseconds: 50),
       );
 
-      await expectLater(future, throwsA(isA<TimeoutException>()));
+      await expectLater(
+        future,
+        throwsA(
+          isA<TimeoutException>()
+              .having((e) => e.message, 'message', 'Future not completed')
+              .having(
+                (e) => e.duration,
+                'duration',
+                const Duration(milliseconds: 50),
+              ),
+        ),
+      );
+    });
+
+    test('source TimeoutException does not fault the queue', () async {
+      final queue = Queue(timeoutError: StateError('faulted'));
+
+      await expectLater(
+        queue.add(
+          () => Future<void>.error(TimeoutException('native error')),
+          const Duration(seconds: 1),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+
+      expect(await queue.add(() async => 42), 42);
     });
 
     test('reports remaining items via onRemainingItemsUpdate', () async {

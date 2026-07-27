@@ -9,19 +9,29 @@ import 'dart:async';
 /// earlier pending items, preventing queue bloat from rapid repeated writes
 /// to the same BLE characteristic. Pass [coalesceKey] to [add] to opt in.
 class Queue {
+  final Object? timeoutError;
   final Set<int> _activeItems = {};
   final Map<int, _OperationToken> _unresolvedTokens = {};
   int _lastProcessId = 0;
-  bool _isCancelled = false;
+  _QueueState _state = _QueueState.running;
   final List<_QueuedFuture> _nextCycle = [];
   Function(int)? onRemainingItemsUpdate;
+
+  Queue({this.timeoutError});
+
+  bool get isFaulted => _state == _QueueState.faulted;
+  int get pendingOperations => _nextCycle.length;
+  int get activeOperations => _unresolvedTokens.length;
 
   Future<T> add<T>(
     Future<T> Function() closure, [
     Duration? timeout,
     String? coalesceKey,
   ]) {
-    if (_isCancelled) throw Exception('Queue Cancelled');
+    if (_state == _QueueState.faulted) {
+      throw timeoutError ?? Exception('Queue faulted after operation timeout');
+    }
+    if (_state == _QueueState.disposed) throw Exception('Queue Cancelled');
     if (coalesceKey != null) {
       _cancelWhere((item) => item.coalesceKey == coalesceKey);
     }
@@ -50,7 +60,7 @@ class Queue {
       token.detach();
     }
     _unresolvedTokens.clear();
-    _isCancelled = true;
+    _state = _QueueState.disposed;
     final remainingItemsUpdate = onRemainingItemsUpdate;
     onRemainingItemsUpdate = null;
     remainingItemsUpdate?.call(0);
@@ -71,8 +81,21 @@ class Queue {
     _updateRemainingItems();
   }
 
+  void _fault() {
+    if (_state != _QueueState.running) return;
+    _state = _QueueState.faulted;
+    final error =
+        timeoutError ?? Exception('Queue faulted after operation timeout');
+    for (final item in _nextCycle) {
+      item.completer.completeError(error);
+    }
+    _nextCycle.clear();
+  }
+
   void _queueUpNext() {
-    if (_nextCycle.isNotEmpty && !_isCancelled && _activeItems.length <= 1) {
+    if (_nextCycle.isNotEmpty &&
+        _state == _QueueState.running &&
+        _activeItems.length <= 1) {
       final processId = _lastProcessId;
       _activeItems.add(processId);
       final item = _nextCycle.first;
@@ -109,10 +132,11 @@ class _OperationToken {
     _queue?._unresolvedTokens.remove(processId);
   }
 
-  void dartComplete() {
+  void dartComplete({bool timedOut = false}) {
     final q = _queue;
     if (q == null) return;
     q._activeItems.remove(processId);
+    if (timedOut) q._fault();
     q._updateRemainingItems();
     q._queueUpNext();
   }
@@ -175,10 +199,17 @@ class _QueuedFuture<T> {
       closure = null;
     }
 
+    var timedOut = false;
     try {
       T result;
       if (timeout != null) {
-        result = await _trackUnderlying(underlying, token).timeout(timeout!);
+        result = await _trackUnderlying(underlying, token).timeout(
+          timeout!,
+          onTimeout: () {
+            timedOut = true;
+            throw TimeoutException('Future not completed', timeout);
+          },
+        );
       } else {
         result = await _trackUnderlying(underlying, token);
       }
@@ -195,7 +226,9 @@ class _QueuedFuture<T> {
         completer.completeError(e, stack);
       }
     } finally {
-      token?.dartComplete();
+      token?.dartComplete(timedOut: timedOut);
     }
   }
 }
+
+enum _QueueState { running, faulted, disposed }

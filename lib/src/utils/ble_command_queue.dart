@@ -69,7 +69,12 @@ class BleCommandQueue {
   }
 
   Queue _newQueue(String id) {
-    final queue = Queue();
+    final queue = Queue(
+      timeoutError: UniversalBleException(
+        code: UniversalBleErrorCode.operationCancelled,
+        message: 'Command cancelled: queue faulted after operation timeout',
+      ),
+    );
     queue.onRemainingItemsUpdate = (int items) {
       try {
         onQueueUpdate?.call(id, items);
@@ -77,6 +82,29 @@ class BleCommandQueue {
     };
     _queueMap[id] = (queue: queue, type: queueType);
     return queue;
+  }
+
+  QueueDiagnostics getQueueDiagnostics(String id) {
+    final queueKey = _queueMap.containsKey(id) ? id : id.toLowerCase();
+    final entry = _queueMap[queueKey];
+    if (entry == null) {
+      return QueueDiagnostics(
+        queueId: queueKey,
+        queueType: queueType,
+        pendingOperations: 0,
+        activeOperations: 0,
+        state: QueueLifecycleState.notFound,
+      );
+    }
+    return QueueDiagnostics(
+      queueId: queueKey,
+      queueType: entry.type,
+      pendingOperations: entry.queue.pendingOperations,
+      activeOperations: entry.queue.activeOperations,
+      state: entry.queue.isFaulted
+          ? QueueLifecycleState.faulted
+          : QueueLifecycleState.running,
+    );
   }
 
   QueueClearSummary clearQueue(String? id, {Object? error}) {

@@ -590,7 +590,7 @@ You can also completely disable the queue and batch all commands, even for the s
 UniversalBle.queueType = QueueType.none;
 ```
 
-Keep in mind that some platforms (e.g. Android) may not handle well devices that fail to process consecutive commands without a minimum interval. Therefore, it is not advised to set `queueType` to `none`.
+Keep in mind that some platforms (e.g. Android) may not handle well devices that fail to process consecutive commands without a minimum interval. Therefore, it is not advised to set `queueType` to `none`. Timeout recovery barriers also require a real queue; `QueueType.none` retains its parallel behavior and cannot prevent a timed-out native operation from overlapping later commands.
 
 You can get queue updates by setting:
 
@@ -601,7 +601,16 @@ UniversalBle.onQueueUpdate = (String id, int remainingItems) {
 };
 ```
 
-To clear a queue:
+Inspect a queue without logging command payloads:
+
+```dart
+final diagnostics = UniversalBle.getQueueDiagnostics(deviceId);
+// diagnostics.state: running, faulted, or notFound
+// diagnostics.pendingOperations: commands not yet dispatched
+// diagnostics.activeOperations: dispatched native Futures still unresolved
+```
+
+To clear or recover a queue:
 
 ```dart
 // Clear global queue
@@ -642,7 +651,9 @@ final summary = UniversalBle.clearQueueWithResult(
 Use `operationCancelled` when the application deliberately resets queued work.
 `deviceDisconnected` is reserved for a disconnect confirmed by the platform
 layer. Clearing completes only pending commands; it does not cancel an
-already-running BLE operation or its underlying native Future.
+already-running BLE operation or its underlying native Future. Clearing removes
+the old queue generation, so the next command creates a clean one. A confirmed
+device disconnect does this automatically for its per-device queue.
 
 ## Timeout
 
@@ -657,6 +668,14 @@ UniversalBle.timeout = null;
 ```
 
 You can also specify the `timeout` parameter when sending a command. This will override the global timeout.
+
+A timeout completes that command's caller with the original `TimeoutException`,
+but Dart cannot cancel the underlying native Future. The affected queue is
+therefore marked `faulted`: pending and newly submitted commands fail with
+`UniversalBleErrorCode.operationCancelled` and are not dispatched. Call one of
+the queue-clear APIs only after your application has explicitly recovered the
+native connection, or disconnect and reconnect the device. Late completion of
+the old native Future does not reactivate the faulted queue.
 
 ## Error Handling
 

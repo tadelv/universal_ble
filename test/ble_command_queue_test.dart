@@ -205,7 +205,7 @@ void main() {
       expect(order, [2, 1]);
     });
 
-    test('queueCommandWithoutTimeout bypasses global timeout', () async {
+    test('queueCommandWithoutTimeout bypasses timeout after recovery', () async {
       final commandQueue = BleCommandQueue()
         ..timeout = const Duration(milliseconds: 10);
 
@@ -215,6 +215,7 @@ void main() {
         ),
         throwsA(isA<TimeoutException>()),
       );
+      commandQueue.clearQueue(BleCommandQueue.globalQueueId);
 
       await expectLater(
         commandQueue.queueCommandWithoutTimeout(
