@@ -80,33 +80,35 @@ void main() {
   });
 
   group('queue drain on disconnect', () {
-    test('pending commands fail immediately when the device disconnects',
-        () async {
-      mock.hangingWrites.add('device-a');
+    test(
+      'pending commands fail immediately when the device disconnects',
+      () async {
+        mock.hangingWrites.add('device-a');
 
-      // First write occupies the queue head (hangs), second is pending.
-      final inFlight = write('device-a', timeout: const Duration(seconds: 1));
-      final pending = write('device-a');
+        // First write occupies the queue head (hangs), second is pending.
+        final inFlight = write('device-a', timeout: const Duration(seconds: 1));
+        final pending = write('device-a');
 
-      await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+        mock.updateConnection('device-a', false);
 
-      // Pending command fails right away with deviceDisconnected — it must
-      // NOT wait out its own 5s timeout.
-      await expectLater(
-        pending.timeout(const Duration(milliseconds: 500)),
-        throwsA(
-          isA<UniversalBleException>().having(
-            (e) => e.code,
-            'code',
-            UniversalBleErrorCode.deviceDisconnected,
+        // Pending command fails right away with deviceDisconnected — it must
+        // NOT wait out its own 5s timeout.
+        await expectLater(
+          pending.timeout(const Duration(milliseconds: 500)),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.deviceDisconnected,
+            ),
           ),
-        ),
-      );
+        );
 
-      // The in-flight command cannot be cancelled; it fails via its timeout.
-      await expectLater(inFlight, throwsA(isA<TimeoutException>()));
-    });
+        // The in-flight command cannot be cancelled; it fails via its timeout.
+        await expectLater(inFlight, throwsA(isA<TimeoutException>()));
+      },
+    );
 
     test('matches disconnect device IDs case-insensitively', () async {
       mock.hangingWrites.add('DEVICE-A');
@@ -133,11 +135,10 @@ void main() {
     test('drain only affects the disconnected device', () async {
       mock.hangingWrites.add('device-a');
 
-      final pendingA =
-          write('device-a', timeout: const Duration(seconds: 1)).then(
-        (_) => 'completed',
-        onError: (_) => 'failed',
-      );
+      final pendingA = write(
+        'device-a',
+        timeout: const Duration(seconds: 1),
+      ).then((_) => 'completed', onError: (_) => 'failed');
       final pendingB = write('device-b');
 
       await pumpEventQueue();
@@ -172,39 +173,41 @@ void main() {
   });
 
   group('disconnect is not queued', () {
-    test('disconnect completes even when the device queue is stalled',
-        () async {
-      mock.hangingWrites.add('device-a');
+    test(
+      'disconnect completes even when the device queue is stalled',
+      () async {
+        mock.hangingWrites.add('device-a');
 
-      // Stall the device queue and stack a pending command behind it.
-      // Expectations are attached up front: the drain errors fire while
-      // disconnect() is still awaited below.
-      final inFlight = expectLater(
-        write('device-a', timeout: const Duration(seconds: 1)),
-        throwsA(isA<TimeoutException>()),
-      );
-      final pending = expectLater(
-        write('device-a'),
-        throwsA(
-          isA<UniversalBleException>().having(
-            (e) => e.code,
-            'code',
-            UniversalBleErrorCode.deviceDisconnected,
+        // Stall the device queue and stack a pending command behind it.
+        // Expectations are attached up front: the drain errors fire while
+        // disconnect() is still awaited below.
+        final inFlight = expectLater(
+          write('device-a', timeout: const Duration(seconds: 1)),
+          throwsA(isA<TimeoutException>()),
+        );
+        final pending = expectLater(
+          write('device-a'),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.deviceDisconnected,
+            ),
           ),
-        ),
-      );
-      await pumpEventQueue();
+        );
+        await pumpEventQueue();
 
-      // Disconnect must not wait behind the stalled queue.
-      await UniversalBle.disconnect(
-        'device-a',
-        timeout: const Duration(milliseconds: 500),
-      );
-      expect(mock.disconnectCalls, ['device-a']);
+        // Disconnect must not wait behind the stalled queue.
+        await UniversalBle.disconnect(
+          'device-a',
+          timeout: const Duration(milliseconds: 500),
+        );
+        expect(mock.disconnectCalls, ['device-a']);
 
-      // The disconnect event drained the pending command.
-      await pending;
-      await inFlight;
-    });
+        // The disconnect event drained the pending command.
+        await pending;
+        await inFlight;
+      },
+    );
   });
 }

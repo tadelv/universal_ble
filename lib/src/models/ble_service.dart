@@ -78,11 +78,7 @@ class BleCharacteristic {
   }
 
   @override
-  int get hashCode => Object.hash(
-        uuid,
-        Object.hashAll(properties),
-        metaData,
-      );
+  int get hashCode => Object.hash(uuid, Object.hashAll(properties), metaData);
 }
 
 class BleDescriptor {

@@ -26,17 +26,19 @@ class UniversalBle {
   /// and custom [queueId] queues are left untouched.
   static UniversalBlePlatform _wireQueueDrain(UniversalBlePlatform platform) {
     _queueDrainSubscription?.cancel();
-    _queueDrainSubscription = platform.bleConnectionUpdateStreamController.stream
+    _queueDrainSubscription = platform
+        .bleConnectionUpdateStreamController
+        .stream
         .where((e) => !e.isConnected)
         .listen((e) {
-      _bleCommandQueue.clearQueue(
-        e.deviceId,
-        error: UniversalBleException(
-          code: UniversalBleErrorCode.deviceDisconnected,
-          message: "Command cancelled: device disconnected",
-        ),
-      );
-    });
+          _bleCommandQueue.clearQueue(
+            e.deviceId,
+            error: UniversalBleException(
+              code: UniversalBleErrorCode.deviceDisconnected,
+              message: "Command cancelled: device disconnected",
+            ),
+          );
+        });
     return platform;
   }
 
@@ -93,8 +95,8 @@ class UniversalBle {
   /// and the native error string (e.g. "GATT_CONN_TIMEOUT") on
   /// disconnect. The error is `null` on connect.
   static Stream<({String deviceId, bool isConnected, String? error})>
-      connectionUpdateStream(String deviceId) =>
-          _platform.connectionUpdateStream(deviceId);
+  connectionUpdateStream(String deviceId) =>
+      _platform.connectionUpdateStream(deviceId);
 
   /// Characteristic value stream
   static Stream<Uint8List> characteristicValueStream(
@@ -245,10 +247,7 @@ class UniversalBle {
   /// Not queued: teardown must never wait behind pending (possibly stalled)
   /// commands of the device being torn down. Pending queued commands for the
   /// device are cancelled when the disconnect event arrives.
-  static Future<void> disconnect(
-    String deviceId, {
-    Duration? timeout,
-  }) async {
+  static Future<void> disconnect(String deviceId, {Duration? timeout}) async {
     timeout ??= const Duration(seconds: 60);
     BleConnectionState? connectionState;
     try {
@@ -263,13 +262,10 @@ class UniversalBle {
         timeout: timeout,
       );
 
-      await _platform
-          .disconnect(deviceId)
-          .timeout(timeout)
-          .catchError((error) {
-            if (completer.isCompleted) return;
-            completer.completeError(ConnectionException(error));
-          });
+      await _platform.disconnect(deviceId).timeout(timeout).catchError((error) {
+        if (completer.isCompleted) return;
+        completer.completeError(ConnectionException(error));
+      });
 
       if (connectionState == BleConnectionState.disconnected ||
           connectionState == BleConnectionState.disconnecting) {
@@ -794,7 +790,9 @@ class UniversalBle {
     connectionSubscription = _platform
         .bleConnectionUpdateStreamController
         .stream
-        .where((e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target)
+        .where(
+          (e) => e.deviceId == deviceId || e.deviceId.toLowerCase() == target,
+        )
         .listen(
           (e) {
             cancelSubscription();

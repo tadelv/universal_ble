@@ -181,6 +181,66 @@ void main() {
       );
     });
 
+    // --- Unresolved-operation tracking (memory-retention regression) ---
+
+    test('detached operation does not affect replacement queue', () async {
+      final release1 = Completer<void>();
+      final release2 = Completer<void>();
+
+      // Queue 1: start a command that will time out.
+      final queue1 = Queue();
+      final timedOut1 = queue1.add(
+        () async => release1.future,
+        const Duration(milliseconds: 10),
+      );
+      await expectLater(timedOut1, throwsA(isA<TimeoutException>()));
+      queue1.dispose();
+
+      // Queue 2: replacement queue (same conceptual device).
+      final queue2 = Queue();
+      final order = <String>[];
+      final started2 = Completer<void>();
+
+      final second = queue2.add(() async {
+        order.add('second-start');
+        started2.complete();
+        await release2.future;
+        order.add('second-end');
+      });
+
+      await started2.future;
+
+      // Complete the old underlying future — must not touch queue2.
+      release1.complete();
+      await pumpEventQueue();
+      expect(order, ['second-start']);
+
+      release2.complete();
+      await second;
+      expect(order, ['second-start', 'second-end']);
+    });
+
+    test('repeated timeout and clear tracks correct counts', () async {
+      for (var i = 0; i < 3; i++) {
+        final queue = Queue();
+        final release = Completer<void>();
+
+        final timedOut = queue.add(
+          () async => release.future,
+          const Duration(milliseconds: 10),
+        );
+        await expectLater(timedOut, throwsA(isA<TimeoutException>()));
+
+        final result = queue.dispose();
+        expect(result.activeOperations, 1);
+        expect(result.pendingCancelled, 0);
+
+        // Complete old future after clear.
+        release.complete();
+        await pumpEventQueue();
+      }
+    });
+
     test('in-flight command completes after dispose', () async {
       final queue = Queue();
       final release = Completer<void>();

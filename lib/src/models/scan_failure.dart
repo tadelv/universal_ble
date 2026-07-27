@@ -25,14 +25,14 @@ class ScanFailure {
   const ScanFailure(this.errorCode, this.message);
 
   ScanFailureReason get reason => switch (errorCode) {
-        1 => ScanFailureReason.alreadyStarted,
-        2 => ScanFailureReason.applicationRegistrationFailed,
-        3 => ScanFailureReason.internalError,
-        4 => ScanFailureReason.featureUnsupported,
-        5 => ScanFailureReason.outOfHardwareResources,
-        6 => ScanFailureReason.scanningTooFrequently,
-        _ => ScanFailureReason.unknown,
-      };
+    1 => ScanFailureReason.alreadyStarted,
+    2 => ScanFailureReason.applicationRegistrationFailed,
+    3 => ScanFailureReason.internalError,
+    4 => ScanFailureReason.featureUnsupported,
+    5 => ScanFailureReason.outOfHardwareResources,
+    6 => ScanFailureReason.scanningTooFrequently,
+    _ => ScanFailureReason.unknown,
+  };
 
   @override
   String toString() => 'ScanFailure($errorCode, $message)';

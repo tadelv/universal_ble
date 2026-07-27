@@ -41,20 +41,22 @@ void main() {
   });
 
   group('clearGattCache', () {
-    test('throws notSupported on platforms without an implementation',
-        () async {
-      UniversalBle.setInstance(_ScanFailureMockPlatform());
+    test(
+      'throws notSupported on platforms without an implementation',
+      () async {
+        UniversalBle.setInstance(_ScanFailureMockPlatform());
 
-      await expectLater(
-        UniversalBle.clearGattCache('device-a'),
-        throwsA(
-          isA<UniversalBleException>().having(
-            (e) => e.code,
-            'code',
-            UniversalBleErrorCode.notSupported,
+        await expectLater(
+          UniversalBle.clearGattCache('device-a'),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.notSupported,
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   });
 }
