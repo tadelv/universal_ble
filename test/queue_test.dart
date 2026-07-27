@@ -124,6 +124,48 @@ void main() {
       );
     });
 
+    test('dispose reports pending and active operations', () async {
+      final queue = Queue();
+      final started = Completer<void>();
+      final release = Completer<void>();
+
+      final active = queue.add(() async {
+        started.complete();
+        await release.future;
+      });
+      final pending = [queue.add(() async {}), queue.add(() async {})];
+      final cancelled = pending.map(
+        (future) => expectLater(future, throwsA(isA<Exception>())),
+      );
+
+      await started.future;
+      final result = queue.dispose();
+
+      expect(result.pendingCancelled, 2);
+      expect(result.activeOperations, 1);
+      await Future.wait(cancelled);
+      release.complete();
+      await active;
+    });
+
+    test('dispose reports a timed-out native Future as unresolved', () async {
+      final queue = Queue();
+      final release = Completer<void>();
+
+      final timedOut = queue.add(
+        () async => release.future,
+        const Duration(milliseconds: 10),
+      );
+      await expectLater(timedOut, throwsA(isA<TimeoutException>()));
+
+      final result = queue.dispose();
+
+      expect(result.pendingCancelled, 0);
+      expect(result.activeOperations, 1);
+      release.complete();
+      await pumpEventQueue();
+    });
+
     test('dispose prevents adding new commands', () {
       final queue = Queue()..dispose();
 

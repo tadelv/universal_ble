@@ -115,6 +115,28 @@ void main() {
     },
   );
 
+  test('structured clear result is available through the public API', () {
+    final error = UniversalBleException(
+      code: UniversalBleErrorCode.operationCancelled,
+      message: 'reset',
+    );
+
+    final summary = UniversalBle.clearQueueWithResult(
+      id: 'UNKNOWN',
+      error: error,
+    );
+
+    expect(summary.pendingCancelled, 0);
+    expect(summary.activeOperations, 0);
+    expect(summary.queues.single.queueId, 'unknown');
+    expect(summary.queues.single.queueType, QueueType.perDevice);
+    expect(summary.queues.single.state, QueueLifecycleState.notFound);
+    expect(
+      summary.queues.single.errorCode,
+      UniversalBleErrorCode.operationCancelled,
+    );
+  });
+
   test(
     'typed clear preserves the error, in-flight work, and other queues',
     () async {

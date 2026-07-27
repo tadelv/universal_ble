@@ -624,6 +624,19 @@ UniversalBle.clearQueueWithError(
     message: 'Cancelled because the application reset the BLE queue',
   ),
 );
+
+// Clear with structured, payload-free diagnostics
+final summary = UniversalBle.clearQueueWithResult(
+  id: deviceId,
+  error: UniversalBleException(
+    code: UniversalBleErrorCode.operationCancelled,
+    message: 'Queue reset after timeout',
+  ),
+);
+// Example for one active + two pending:
+// summary.pendingCancelled == 2
+// summary.activeOperations == 1
+// summary.queues.single.state == QueueLifecycleState.cleared
 ```
 
 Use `operationCancelled` when the application deliberately resets queued work.

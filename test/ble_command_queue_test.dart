@@ -255,6 +255,73 @@ void main() {
       expect(updates['tilta']!.last, 0);
     });
 
+    test('clearQueue reports active and pending work and final zero', () async {
+      final commandQueue = BleCommandQueue(queueType: QueueType.perDevice);
+      final updates = <int>[];
+      final release = Completer<void>();
+      final started = Completer<void>();
+      commandQueue.onQueueUpdate = (id, remaining) {
+        if (id == 'device-a') updates.add(remaining);
+      };
+
+      final active = commandQueue.queueCommand(
+        () async {
+          started.complete();
+          await release.future;
+        },
+        deviceId: 'device-a',
+      );
+      final pending = [
+        commandQueue.queueCommand(() async {}, deviceId: 'device-a'),
+        commandQueue.queueCommand(() async {}, deviceId: 'device-a'),
+      ];
+      final cancelled = pending.map(
+        (future) => expectLater(future, throwsA(isA<Exception>())),
+      );
+
+      await started.future;
+      final summary = commandQueue.clearQueue('device-a');
+
+      expect(summary.pendingCancelled, 2);
+      expect(summary.activeOperations, 1);
+      expect(summary.queues, hasLength(1));
+      expect(summary.queues.single.queueId, 'device-a');
+      expect(summary.queues.single.queueType, QueueType.perDevice);
+      expect(summary.queues.single.state, QueueLifecycleState.cleared);
+      expect(
+        summary.queues.single.reason,
+        QueueClearReason.defaultCancellation,
+      );
+      expect(summary.queues.single.errorCode, isNull);
+      expect(updates.last, 0);
+
+      await Future.wait(cancelled);
+      release.complete();
+      await active;
+    });
+
+    test('clearQueue reports an unknown queue without throwing', () {
+      final commandQueue = BleCommandQueue(queueType: QueueType.perDevice);
+
+      final summary = commandQueue.clearQueue('MISSING');
+
+      expect(summary.pendingCancelled, 0);
+      expect(summary.activeOperations, 0);
+      expect(summary.queues.single.queueId, 'missing');
+      expect(summary.queues.single.state, QueueLifecycleState.notFound);
+    });
+
+    test('clearQueue reports a known empty queue as cleared', () async {
+      final commandQueue = BleCommandQueue();
+      await commandQueue.queueCommand(() async {}, queueId: 'empty');
+
+      final summary = commandQueue.clearQueue('empty');
+
+      expect(summary.pendingCancelled, 0);
+      expect(summary.activeOperations, 0);
+      expect(summary.queues.single.state, QueueLifecycleState.cleared);
+    });
+
     test('clearQueue cancels pending commands for a specific queue id', () async {
       final commandQueue = BleCommandQueue();
       final order = <String>[];
@@ -339,6 +406,64 @@ void main() {
 
       releaseDefault.complete();
       releaseCustom.complete();
+    });
+
+    test('clear-all reports deterministic per-queue and aggregate counts', () async {
+      final commandQueue = BleCommandQueue();
+      final releases = {
+        'zeta': Completer<void>(),
+        'alpha': Completer<void>(),
+      };
+      final started = {
+        'zeta': Completer<void>(),
+        'alpha': Completer<void>(),
+      };
+      final active = <Future<void>>[];
+      final pending = <Future<void>>[];
+      final updates = <String, int>{};
+      commandQueue.onQueueUpdate = (id, remaining) => updates[id] = remaining;
+
+      for (final id in ['zeta', 'alpha']) {
+        active.add(
+          commandQueue.queueCommand(
+            () async {
+              started[id]!.complete();
+              await releases[id]!.future;
+            },
+            queueId: id,
+          ),
+        );
+        pending.add(commandQueue.queueCommand(() async {}, queueId: id));
+      }
+      final cancelled = pending.map(
+        (future) => expectLater(future, throwsA(isA<Exception>())),
+      );
+      await Future.wait(started.values.map((completer) => completer.future));
+
+      final error = UniversalBleException(
+        code: UniversalBleErrorCode.operationCancelled,
+        message: 'reset',
+      );
+      final summary = commandQueue.clearQueue(null, error: error);
+
+      expect(summary.queues.map((result) => result.queueId), ['alpha', 'zeta']);
+      expect(summary.pendingCancelled, 2);
+      expect(summary.activeOperations, 2);
+      expect(updates, {'alpha': 0, 'zeta': 0});
+      expect(
+        summary.queues.map((result) => result.reason),
+        everyElement(QueueClearReason.suppliedError),
+      );
+      expect(
+        summary.queues.map((result) => result.errorCode),
+        everyElement(UniversalBleErrorCode.operationCancelled),
+      );
+
+      await Future.wait(cancelled);
+      for (final release in releases.values) {
+        release.complete();
+      }
+      await Future.wait(active);
     });
 
     test('clearQueue surfaces a custom error to pending commands', () async {

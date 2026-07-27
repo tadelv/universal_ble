@@ -10,6 +10,7 @@ import 'dart:async';
 /// to the same BLE characteristic. Pass [coalesceKey] to [add] to opt in.
 class Queue {
   final Set<int> _activeItems = {};
+  final Set<int> _unresolvedItems = {};
   int _lastProcessId = 0;
   bool _isCancelled = false;
   final List<_QueuedFuture> _nextCycle = [];
@@ -30,12 +31,21 @@ class Queue {
   /// Cancel all pending items and stop accepting new ones.
   /// Pending items complete with [error], or a generic
   /// `Queue Cancelled` exception when none is given.
-  void dispose([Object? error]) {
+  ///
+  /// Returns counts captured before clearing. Active operations keep running.
+  ({int pendingCancelled, int activeOperations}) dispose([Object? error]) {
+    final pendingCancelled = _nextCycle.length;
+    final activeOperations = _unresolvedItems.length;
     for (final item in _nextCycle) {
       item.completer.completeError(error ?? Exception('Queue Cancelled'));
     }
     _nextCycle.removeWhere((item) => item.completer.isCompleted);
     _isCancelled = true;
+    onRemainingItemsUpdate?.call(0);
+    return (
+      pendingCancelled: pendingCancelled,
+      activeOperations: activeOperations,
+    );
   }
 
   /// Cancel pending (not yet executing) items matching [test].
@@ -53,6 +63,7 @@ class Queue {
     if (_nextCycle.isNotEmpty && !_isCancelled && _activeItems.length <= 1) {
       final processId = _lastProcessId;
       _activeItems.add(processId);
+      _unresolvedItems.add(processId);
       final item = _nextCycle.first;
       _lastProcessId++;
       _nextCycle.remove(item);
@@ -61,6 +72,7 @@ class Queue {
         _updateRemainingItems();
         _queueUpNext();
       };
+      item.onUnderlyingComplete = () => _unresolvedItems.remove(processId);
       unawaited(item.execute());
     }
   }
@@ -75,6 +87,7 @@ class _QueuedFuture<T> {
   final Completer completer;
   final Future<T> Function() closure;
   Function? onComplete;
+  Function? onUnderlyingComplete;
   final Duration? timeout;
   final String? coalesceKey;
 
@@ -82,12 +95,20 @@ class _QueuedFuture<T> {
       {this.onComplete, this.coalesceKey});
 
   Future<void> execute() async {
+    Future<T> runUnderlying() async {
+      try {
+        return await closure();
+      } finally {
+        onUnderlyingComplete?.call();
+      }
+    }
+
     try {
       T result;
       if (timeout != null) {
-        result = await closure().timeout(timeout!);
+        result = await runUnderlying().timeout(timeout!);
       } else {
-        result = await closure();
+        result = await runUnderlying();
       }
       if (result != null) {
         completer.complete(result);

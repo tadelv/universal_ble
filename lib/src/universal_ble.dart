@@ -694,6 +694,15 @@ class UniversalBle {
   static void clearQueueWithError(String id, {required Object error}) =>
       _bleCommandQueue.clearQueue(id, error: error);
 
+  /// Clear one queue, or all queues when [id] is omitted, and return
+  /// payload-free diagnostics captured synchronously from the queue state.
+  ///
+  /// [QueueClearResult.activeOperations] counts already-running operations that
+  /// could not be cancelled. If [error] is a [UniversalBleException], its code
+  /// is included without retaining or logging the exception or BLE payload.
+  static QueueClearSummary clearQueueWithResult({String? id, Object? error}) =>
+      _bleCommandQueue.clearQueue(id, error: error);
+
   /// [receivesAdvertisements] returns true on web if the browser supports receiving advertisements from a certain `deviceId`.
   /// The rest of the platforms will always return true.
   /// If true, then you will be getting scanResult updates for this device.

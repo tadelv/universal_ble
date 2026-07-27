@@ -12,6 +12,7 @@ Multi-device queue isolation + connect-lifecycle hardening (fbp-inspired).
 * Add `UniversalBle.scanFailureStream` + `onScanFailure` — surfaces Android `ScanCallback.onScanFailed`, previously swallowed (log-only). Notably `ScanFailureReason.scanningTooFrequently` (Android's 5-scans/30s throttle), which is otherwise indistinguishable from an empty scan.
 * Add `UniversalBle.clearGattCache(deviceId)` (Android only, `BleCapabilities.supportsClearGattCacheApi`) — clears Android's GATT service cache via `BluetoothGatt#refresh()`; remedy for stale service caches after peripheral firmware updates.
 * Add `clearQueueWithError(id, error: ...)` to complete pending commands in a selected queue with the caller-supplied error. Existing `clearQueue()` calls keep their default cancellation behavior; already-running BLE operations are not cancelled.
+* Add `clearQueueWithResult()` with deterministic per-queue and aggregate cancellation diagnostics, including pending/active counts, typed error codes, and final queue state without BLE payloads.
 * Removed stale plugin-template Kotlin test that referenced a nonexistent `onMethodCall` and broke `testDebugUnitTest` compilation.
 
 ## 2.1.2

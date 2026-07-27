@@ -79,14 +79,59 @@ class BleCommandQueue {
     return queue;
   }
 
-  void clearQueue(String? id, {Object? error}) {
+  QueueClearSummary clearQueue(String? id, {Object? error}) {
+    final reason = error == null
+        ? QueueClearReason.defaultCancellation
+        : QueueClearReason.suppliedError;
+    final errorCode = error is UniversalBleException ? error.code : null;
+
     if (id == null) {
-      _queueMap.forEach((k, v) => v.dispose(error));
+      final entries = _queueMap.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      final results = [
+        for (final entry in entries)
+          _clearResult(entry.key, entry.value, reason, errorCode, error),
+      ];
       _queueMap.clear();
-    } else {
-      final queueKey = _queueMap.containsKey(id) ? id : id.toLowerCase();
-      _queueMap[queueKey]?.dispose(error);
-      _queueMap.remove(queueKey);
+      return QueueClearSummary(results);
     }
+
+    final queueKey = _queueMap.containsKey(id) ? id : id.toLowerCase();
+    final queue = _queueMap.remove(queueKey);
+    if (queue == null) {
+      return QueueClearSummary([
+        QueueClearResult(
+          queueId: queueKey,
+          queueType: queueType,
+          pendingCancelled: 0,
+          activeOperations: 0,
+          reason: reason,
+          errorCode: errorCode,
+          state: QueueLifecycleState.notFound,
+        ),
+      ]);
+    }
+    return QueueClearSummary([
+      _clearResult(queueKey, queue, reason, errorCode, error),
+    ]);
+  }
+
+  QueueClearResult _clearResult(
+    String queueId,
+    Queue queue,
+    QueueClearReason reason,
+    UniversalBleErrorCode? errorCode,
+    Object? error,
+  ) {
+    final result = queue.dispose(error);
+    return QueueClearResult(
+      queueId: queueId,
+      queueType: queueType,
+      pendingCancelled: result.pendingCancelled,
+      activeOperations: result.activeOperations,
+      reason: reason,
+      errorCode: errorCode,
+      state: QueueLifecycleState.cleared,
+    );
   }
 }
