@@ -338,9 +338,9 @@ enum UniversalBleErrorCode: Int {
   case operationTimeout = 34
   case operationCancelled = 35
   case operationInProgress = 36
-  /// Android GATT_ERROR (status 133) — generic, often transient.
-  /// The raw GATT status code is included in the exception message.
-  /// Callers should retry once before declaring the link dead.
+  /// Android GATT_ERROR (status 133) — generic and often transient.
+  /// The raw GATT status is available in the exception details.
+  /// Retry policy belongs to the consumer; retry only operations safe to repeat.
   case gattError = 37
   case characteristicDoesNotSupportRead = 38
   case characteristicDoesNotSupportWrite = 39

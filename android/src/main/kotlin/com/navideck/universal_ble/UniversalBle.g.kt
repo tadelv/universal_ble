@@ -444,9 +444,9 @@ enum class UniversalBleErrorCode(val raw: Int) {
   OPERATION_CANCELLED(35),
   OPERATION_IN_PROGRESS(36),
   /**
-   * Android GATT_ERROR (status 133) — generic, often transient.
-   * The raw GATT status code is included in the exception message.
-   * Callers should retry once before declaring the link dead.
+   * Android GATT_ERROR (status 133) — generic and often transient.
+   * The raw GATT status is available in the exception details.
+   * Retry policy belongs to the consumer; retry only operations safe to repeat.
    */
   GATT_ERROR(37),
   CHARACTERISTIC_DOES_NOT_SUPPORT_READ(38),

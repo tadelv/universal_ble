@@ -262,7 +262,7 @@ fun gattStatusToUniversalBleErrorCode(code: Int): UniversalBleErrorCode {
         // Not exposed as a public constant in BluetoothGatt — it's the
         // internal status code the stack returns when it can't give a
         // more specific reason. Common on connect, read, and write.
-        // Surface as gattError so callers can retry vs. declare link dead.
+        // Surface as gattError so callers can choose operation-specific recovery.
         133 -> UniversalBleErrorCode.GATT_ERROR
         0x01 -> UniversalBleErrorCode.INVALID_HANDLE
         0x04 -> UniversalBleErrorCode.INVALID_PDU

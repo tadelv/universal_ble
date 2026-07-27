@@ -631,10 +631,10 @@ enum UniversalBleErrorCode {
   operationCancelled,
   operationInProgress,
 
-  // GATT-level errors (Android-specific, surfaced for caller retry decisions)
-  /// Android GATT_ERROR (status 133) — generic, often transient.
-  /// The raw GATT status code is included in the exception message.
-  /// Callers should retry once before declaring the link dead.
+  // GATT-level errors (Android-specific, surfaced for caller recovery decisions)
+  /// Android GATT_ERROR (status 133) — generic and often transient.
+  /// The raw GATT status is available in the exception details.
+  /// Retry policy belongs to the consumer; retry only operations safe to repeat.
   gattError,
 
   // Characteristic property errors

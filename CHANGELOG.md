@@ -5,7 +5,7 @@ Multi-device queue isolation + connect-lifecycle hardening (fbp-inspired).
 * **BREAKING**: `disconnect()` no longer goes through the command queue (its `queueId` parameter was removed). Teardown must never wait behind pending — possibly stalled — commands of the device being torn down. Writes you `await` before disconnecting still complete first.
 * Queue drain on disconnect: when a device disconnects, its pending queued commands fail immediately with `UniversalBleErrorCode.deviceDisconnected` instead of each burning its own timeout. Only queues keyed by deviceId are affected (`QueueType.perDevice`); the global queue and custom `queueId` queues are untouched.
 * `connect()` timeout now cancels the pending native connect attempt (best-effort platform disconnect). Previously the OS could complete the connection later with nobody listening — a stranded "zombie" link.
-* **BREAKING (behavior)**: removed the Android-native GATT-133 retry added in 2.1.1. It forwarded the disconnect to Dart *before* retrying, so app-level reconnects raced the native retry with competing `connectGatt` clients — itself a classic 133 cause. GATT-133 is still surfaced as `gattError`; retry policy belongs to the caller.
+* **BREAKING (behavior)**: removed the Android-native GATT-133 retry added in 2.1.1. It forwarded the disconnect to Dart *before* retrying, so app-level reconnects raced the native retry with competing `connectGatt` clients — itself a classic 133 cause. GATT-133 is still surfaced as `gattError`; retry policy belongs to the caller, which should retry only operations that are safe to repeat.
 * Android: enforce a 2s minimum gap between `connectGatt` and disconnect (flutter_blue_plus `androidDelay` pattern, Google issue 37121040) to avoid stranding connections the stack no longer tracks.
 * Android: close the GATT client when cancelling a connect attempt that never reached `STATE_CONNECTED` — Android delivers no callback for those, and leaked clients (capped at 32) surface as GATT-133 later.
 * Android: on adapter off, fail all pending operations and close all GATT clients (Android does not reliably deliver per-device callbacks when the adapter goes down). Devices report disconnect with error `"ADAPTER_OFF"`.
@@ -15,7 +15,7 @@ Multi-device queue isolation + connect-lifecycle hardening (fbp-inspired).
 * Removed stale plugin-template Kotlin test that referenced a nonexistent `onMethodCall` and broke `testDebugUnitTest` compilation.
 
 ## 2.1.2
-* Add `gattError` to `UniversalBleErrorCode` — Android GATT status 133 (GATT_ERROR) is now surfaced as a distinct error code instead of collapsing to `unknownError`. Callers can distinguish a transient GATT-133 (retryable) from a permanent disconnect. The raw GATT status code is included in the exception message/details.
+* Add `gattError` to `UniversalBleErrorCode` — Android GATT status 133 (GATT_ERROR) is now surfaced as a distinct error code instead of collapsing to `unknownError`. Status 133 is often transient, but retry policy belongs to the consumer because not every operation is safe to repeat. The raw GATT status code is included in the exception details.
 
 ## 2.1.1
 * Android: GATT 133 retry — up to 3 attempts with 500ms→1000ms→1500ms backoff on ERROR_GATT disconnect. Common on older Android BLE stacks; retry often succeeds on the second attempt.
