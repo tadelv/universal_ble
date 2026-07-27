@@ -615,7 +615,21 @@ UniversalBle.clearQueue('customQueueId');
 
 // Clear all queues
 UniversalBle.clearQueue();
+
+// Clear one queue with a typed application-cancellation error
+UniversalBle.clearQueueWithError(
+  deviceId,
+  error: UniversalBleException(
+    code: UniversalBleErrorCode.operationCancelled,
+    message: 'Cancelled because the application reset the BLE queue',
+  ),
+);
 ```
+
+Use `operationCancelled` when the application deliberately resets queued work.
+`deviceDisconnected` is reserved for a disconnect confirmed by the platform
+layer. Clearing completes only pending commands; it does not cancel an
+already-running BLE operation or its underlying native Future.
 
 ## Timeout
 

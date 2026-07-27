@@ -672,12 +672,27 @@ class UniversalBle {
     );
   }
 
-  /// Clear a queue.
+  /// Clear a queue using the default cancellation exception.
   /// Use [BleCommandQueue.globalQueueId] to clear the global queue.
   /// To clear the queue of a specific device, use `deviceId` as [id].
   /// To clear a custom queue, pass the same `queueId` string used when enqueueing commands.
   /// If no [id] is provided, all queues will be cleared.
+  ///
+  /// Only pending commands are completed; an already-running BLE operation and
+  /// its underlying native [Future] are not cancelled.
   static void clearQueue([String? id]) => _bleCommandQueue.clearQueue(id);
+
+  /// Clear the selected queue and complete its pending commands with [error].
+  ///
+  /// Use a [UniversalBleException] with
+  /// [UniversalBleErrorCode.operationCancelled] when the application
+  /// deliberately resets a queue. [UniversalBleErrorCode.deviceDisconnected]
+  /// is reserved for a disconnect confirmed by the platform layer.
+  ///
+  /// Only pending commands are completed with [error]. An already-running BLE
+  /// operation and its underlying native [Future] are not cancelled.
+  static void clearQueueWithError(String id, {required Object error}) =>
+      _bleCommandQueue.clearQueue(id, error: error);
 
   /// [receivesAdvertisements] returns true on web if the browser supports receiving advertisements from a certain `deviceId`.
   /// The rest of the platforms will always return true.
