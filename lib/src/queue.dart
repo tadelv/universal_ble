@@ -41,7 +41,9 @@ class Queue {
     }
     _nextCycle.removeWhere((item) => item.completer.isCompleted);
     _isCancelled = true;
-    onRemainingItemsUpdate?.call(0);
+    final remainingItemsUpdate = onRemainingItemsUpdate;
+    onRemainingItemsUpdate = null;
+    remainingItemsUpdate?.call(0);
     return (
       pendingCancelled: pendingCancelled,
       activeOperations: activeOperations,

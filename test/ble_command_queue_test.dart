@@ -255,6 +255,81 @@ void main() {
       expect(updates['tilta']!.last, 0);
     });
 
+    test('clear-all detaches queues before zero callbacks', () async {
+      final commandQueue = BleCommandQueue();
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final active = commandQueue.queueCommand(
+        () async {
+          started.complete();
+          await release.future;
+        },
+        queueId: 'old',
+      );
+      await started.future;
+
+      Future<int>? replacement;
+      commandQueue.onQueueUpdate = (id, remaining) {
+        if (id == 'old' && remaining == 0 && replacement == null) {
+          replacement = commandQueue.queueCommand(
+            () async => 7,
+            queueId: 'old',
+          );
+        }
+      };
+
+      commandQueue.clearQueue(null);
+
+      expect(replacement, isNotNull);
+      expect(await replacement, 7);
+      expect(
+        commandQueue.clearQueue('old').queues.single.state,
+        QueueLifecycleState.cleared,
+      );
+      release.complete();
+      await active;
+    });
+
+    test('cleared queue cannot update its replacement', () async {
+      final commandQueue = BleCommandQueue();
+      final updates = <int>[];
+      commandQueue.onQueueUpdate = (id, remaining) {
+        if (id == 'device-a') updates.add(remaining);
+      };
+      final oldStarted = Completer<void>();
+      final releaseOld = Completer<void>();
+      final old = commandQueue.queueCommand(
+        () async {
+          oldStarted.complete();
+          await releaseOld.future;
+        },
+        queueId: 'device-a',
+      );
+      await oldStarted.future;
+      commandQueue.clearQueue('device-a');
+
+      final newStarted = Completer<void>();
+      final releaseNew = Completer<void>();
+      final replacement = commandQueue.queueCommand(
+        () async {
+          newStarted.complete();
+          await releaseNew.future;
+        },
+        queueId: 'device-a',
+      );
+      await newStarted.future;
+
+      releaseOld.complete();
+      await old;
+      await pumpEventQueue();
+      expect(updates.last, 1);
+
+      releaseNew.complete();
+      await replacement;
+      await pumpEventQueue();
+      expect(updates.last, 0);
+    });
+
     test('clearQueue reports active and pending work and final zero', () async {
       final commandQueue = BleCommandQueue(queueType: QueueType.perDevice);
       final updates = <int>[];
@@ -309,6 +384,27 @@ void main() {
       expect(summary.activeOperations, 0);
       expect(summary.queues.single.queueId, 'missing');
       expect(summary.queues.single.state, QueueLifecycleState.notFound);
+    });
+
+    test('clearQueue reports the queue type used at creation', () async {
+      final commandQueue = BleCommandQueue(queueType: QueueType.global);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final active = commandQueue.queueCommand(
+        () async {
+          started.complete();
+          await release.future;
+        },
+        queueId: 'old',
+      );
+      await started.future;
+      commandQueue.queueType = QueueType.perDevice;
+
+      final summary = commandQueue.clearQueue('old');
+
+      expect(summary.queues.single.queueType, QueueType.global);
+      release.complete();
+      await active;
     });
 
     test('clearQueue reports a known empty queue as cleared', () async {
