@@ -13,6 +13,7 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
 
   final List<String> disconnectCalls = [];
   final List<String> startedWrites = [];
+  final List<Completer<void>> writeStartMarkers = [];
   final List<({String deviceId, String characteristic})> completedWrites = [];
 
   @override
@@ -44,6 +45,9 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
     BleOutputProperty bleOutputProperty,
   ) async {
     startedWrites.add(deviceId);
+    if (writeStartMarkers.isNotEmpty) {
+      writeStartMarkers.removeAt(0).complete();
+    }
     if (hangingWrites.contains(deviceId)) {
       await Completer<void>().future; // never completes
     }
@@ -81,6 +85,7 @@ void main() {
   });
 
   tearDown(() {
+    UniversalBle.onQueueUpdate = null;
     UniversalBle.clearQueue();
     UniversalBle.queueType = QueueType.global;
   });
@@ -194,7 +199,7 @@ void main() {
       );
 
       var diagnostics = UniversalBle.getQueueDiagnostics('device-a');
-      expect(diagnostics.state, QueueLifecycleState.faulted);
+      expect(diagnostics.state, QueueDiagnosticsState.faulted);
       expect(diagnostics.pendingOperations, 0);
       expect(diagnostics.activeOperations, 1);
       expect(mock.startedWrites, ['device-a']);
@@ -202,7 +207,7 @@ void main() {
       blocker.complete();
       await pumpEventQueue();
       diagnostics = UniversalBle.getQueueDiagnostics('device-a');
-      expect(diagnostics.state, QueueLifecycleState.faulted);
+      expect(diagnostics.state, QueueDiagnosticsState.faulted);
       expect(diagnostics.activeOperations, 0);
       expect(mock.startedWrites, ['device-a']);
 
@@ -217,7 +222,7 @@ void main() {
       await write('device-a');
       expect(
         UniversalBle.getQueueDiagnostics('device-a').state,
-        QueueLifecycleState.running,
+        QueueDiagnosticsState.running,
       );
       expect(mock.startedWrites, ['device-a', 'device-a']);
     });
@@ -241,7 +246,8 @@ void main() {
       blocker.complete();
     });
 
-    test('global queue fault blocks every queued device', () async {
+    test('global queue fault blocks every device and public id recovers it',
+        () async {
       UniversalBle.queueType = QueueType.global;
       final blocker = Completer<void>();
       mock.writeBlockers['device-a'] = blocker;
@@ -256,9 +262,14 @@ void main() {
       );
       expect(mock.startedWrites, ['device-a']);
       expect(
-        UniversalBle.getQueueDiagnostics('global').state,
-        QueueLifecycleState.faulted,
+        UniversalBle.getQueueDiagnostics(UniversalBle.globalQueueId).state,
+        QueueDiagnosticsState.faulted,
       );
+
+      UniversalBle.clearQueue(UniversalBle.globalQueueId);
+      mock.writeBlockers.remove('device-a');
+      await write('device-b');
+      expect(mock.startedWrites, ['device-a', 'device-b']);
       blocker.complete();
     });
 
@@ -283,6 +294,65 @@ void main() {
       expect(mock.startedWrites, ['device-a', 'device-b']);
       blocker.complete();
     });
+
+    test(
+      'setInstance callback commands use only the replacement platform',
+      () async {
+        final oldStarted = Completer<void>();
+        final oldBlocker = Completer<void>();
+        mock.writeStartMarkers.add(oldStarted);
+        mock.writeBlockers['device-a'] = oldBlocker;
+        final oldWrite = write('device-a');
+        final oldPending = expectLater(
+          write('device-a'),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.operationCancelled,
+            ),
+          ),
+        );
+        await oldStarted.future;
+
+        final replacement = _QueueDrainMockPlatform();
+        final replacementStarted = Completer<void>();
+        final replacementNextStarted = Completer<void>();
+        final replacementBlocker = Completer<void>();
+        replacement.writeStartMarkers.addAll([
+          replacementStarted,
+          replacementNextStarted,
+        ]);
+        replacement.writeBlockers['device-a'] = replacementBlocker;
+
+        Future<void>? callbackWrite;
+        UniversalBle.onQueueUpdate = (id, remaining) {
+          if (id == 'device-a' && remaining == 0 && callbackWrite == null) {
+            callbackWrite = write('device-a');
+          }
+        };
+
+        UniversalBle.setInstance(replacement);
+
+        expect(mock.startedWrites, ['device-a']);
+        expect(replacement.startedWrites, ['device-a']);
+        await oldPending;
+        await replacementStarted.future;
+
+        final replacementNext = expectLater(write('device-a'), completes);
+        oldBlocker.complete();
+        await oldWrite;
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+        expect(replacement.startedWrites, ['device-a']);
+
+        replacementBlocker.complete();
+        await replacementNextStarted.future;
+        await callbackWrite;
+        await replacementNext;
+        expect(replacement.startedWrites, ['device-a', 'device-a']);
+      },
+    );
 
     test('clear-all and platform replacement remove faulted queues', () async {
       var blocker = Completer<void>();
@@ -326,7 +396,7 @@ void main() {
       expect(mock.startedWrites, ['device-a', 'device-a']);
       expect(
         UniversalBle.getQueueDiagnostics('device-a').state,
-        QueueLifecycleState.notFound,
+        QueueDiagnosticsState.notFound,
       );
       blocker.complete();
     });

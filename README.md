@@ -605,7 +605,7 @@ Inspect a queue without logging command payloads:
 
 ```dart
 final diagnostics = UniversalBle.getQueueDiagnostics(deviceId);
-// diagnostics.state: running, faulted, or notFound
+// diagnostics.state is QueueDiagnosticsState.running, .faulted, or .notFound
 // diagnostics.pendingOperations: commands not yet dispatched
 // diagnostics.activeOperations: dispatched native Futures still unresolved
 ```
@@ -614,7 +614,7 @@ To clear or recover a queue:
 
 ```dart
 // Clear global queue
-UniversalBle.clearQueue(BleCommandQueue.globalQueueId);
+UniversalBle.clearQueue(UniversalBle.globalQueueId);
 
 // Clear a per-device queue (when queueType is perDevice)
 UniversalBle.clearQueue(deviceId);
@@ -654,6 +654,11 @@ layer. Clearing completes only pending commands; it does not cancel an
 already-running BLE operation or its underlying native Future. Clearing removes
 the old queue generation, so the next command creates a clean one. A confirmed
 device disconnect does this automatically for its per-device queue.
+
+Replacing the platform instance wires the replacement before clearing old queue
+generations. Commands submitted synchronously by queue-clear callbacks therefore
+use the replacement platform. Any unresolved native Futures from the old
+platform may still complete later, but cannot affect replacement queues.
 
 ## Timeout
 

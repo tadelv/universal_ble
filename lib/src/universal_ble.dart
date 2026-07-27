@@ -9,6 +9,9 @@ import 'package:universal_ble/src/utils/universal_logger.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 class UniversalBle {
+  /// Identifier used by the default global command queue.
+  static const String globalQueueId = BleCommandQueue.globalQueueId;
+
   /// Get platform specific implementation.
   static UniversalBlePlatform _platform = _wireQueueDrain(_defaultPlatform());
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue();
@@ -16,6 +19,7 @@ class UniversalBle {
 
   /// Set custom platform specific implementation (e.g. for testing).
   static void setInstance(UniversalBlePlatform instance) {
+    _platform = _wireQueueDrain(instance);
     _bleCommandQueue.clearQueue(
       null,
       error: UniversalBleException(
@@ -23,7 +27,6 @@ class UniversalBle {
         message: 'Command cancelled: BLE platform instance replaced',
       ),
     );
-    _platform = _wireQueueDrain(instance);
   }
 
   /// Drain a device's pending queued commands as soon as it disconnects.
@@ -683,14 +686,14 @@ class UniversalBle {
 
   /// Return current payload-free state for one queue generation.
   ///
-  /// A [QueueLifecycleState.faulted] queue rejects commands until it is
+  /// A [QueueDiagnosticsState.faulted] queue rejects commands until it is
   /// explicitly cleared. [QueueDiagnostics.activeOperations] counts native
   /// Futures that remain unresolved after their Dart wrappers completed.
   static QueueDiagnostics getQueueDiagnostics(String id) =>
       _bleCommandQueue.getQueueDiagnostics(id);
 
   /// Clear a queue using the default cancellation exception.
-  /// Use [BleCommandQueue.globalQueueId] to clear the global queue.
+  /// Use [globalQueueId] to clear the global queue.
   /// To clear the queue of a specific device, use `deviceId` as [id].
   /// To clear a custom queue, pass the same `queueId` string used when enqueueing commands.
   /// If no [id] is provided, all queues will be cleared. Clearing a faulted

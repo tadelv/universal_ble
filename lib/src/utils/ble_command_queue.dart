@@ -93,7 +93,7 @@ class BleCommandQueue {
         queueType: queueType,
         pendingOperations: 0,
         activeOperations: 0,
-        state: QueueLifecycleState.notFound,
+        state: QueueDiagnosticsState.notFound,
       );
     }
     return QueueDiagnostics(
@@ -102,8 +102,8 @@ class BleCommandQueue {
       pendingOperations: entry.queue.pendingOperations,
       activeOperations: entry.queue.activeOperations,
       state: entry.queue.isFaulted
-          ? QueueLifecycleState.faulted
-          : QueueLifecycleState.running,
+          ? QueueDiagnosticsState.faulted
+          : QueueDiagnosticsState.running,
     );
   }
 
