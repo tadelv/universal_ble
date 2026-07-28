@@ -1,3 +1,8 @@
+## 2.2.3
+
+* Android: enforce a two-second gap between GATT disconnect and reconnect, measured from the latest disconnect event.
+* Android: report delayed connection startup failures, cancel stale pending reconnects, and normalize device IDs across connection lifecycle state.
+
 ## 2.2.2
 
 * iOS/macOS: connecting a peripheral returned by `getSystemDevices()` now attaches to an existing system connection and reports it as connected.
