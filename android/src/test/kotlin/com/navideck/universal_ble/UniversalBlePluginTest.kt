@@ -91,12 +91,17 @@ internal class UniversalBlePluginTest {
         disconnectTimestamps[deviceId.connectionKey()] = 1L
         `when`(gatt.device).thenReturn(device)
         `when`(device.address).thenReturn(deviceId)
+        gatt.saveCacheIfNeeded()
 
-        plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
+        try {
+            plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
 
-        verify(handler).removeCallbacks(pendingConnect)
-        assertFalse(pendingConnects.containsKey(deviceId.connectionKey()))
-        assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+            verify(handler).removeCallbacks(pendingConnect)
+            assertFalse(pendingConnects.containsKey(deviceId.connectionKey()))
+            assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
     }
 
     @Test
@@ -135,7 +140,7 @@ internal class UniversalBlePluginTest {
         try {
             plugin.invoke("cleanUpOnAdapterOff")
         } finally {
-            gatt.removeCache()
+            gatt.removeCacheIfCurrent()
         }
 
         verify(handler).removeCallbacks(pendingConnect)
@@ -175,7 +180,7 @@ internal class UniversalBlePluginTest {
             verify(handler).postDelayed(any(Runnable::class.java), eq(1_500L))
             verify(gatt, never()).disconnect()
         } finally {
-            gatt.removeCache()
+            gatt.removeCacheIfCurrent()
         }
     }
 

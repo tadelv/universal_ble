@@ -112,8 +112,13 @@ fun BluetoothGatt.saveCacheIfNeeded() {
     knownGatts[this.device.address.connectionKey()] = this
 }
 
-fun BluetoothGatt.removeCache() {
-    knownGatts.remove(this.device.address.connectionKey())
+fun BluetoothGatt.isCurrentGatt(): Boolean =
+    knownGatts[this.device.address.connectionKey()] === this
+
+fun BluetoothGatt.removeCacheIfCurrent() {
+    if (isCurrentGatt()) {
+        knownGatts.remove(this.device.address.connectionKey())
+    }
 }
 
 fun allKnownGatts(): List<BluetoothGatt> = knownGatts.values.toList()
@@ -437,17 +442,20 @@ fun Int.parseHciErrorCode(): String? {
 
 // Future result classes
 class DiscoverServicesFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val withDescriptors: Boolean,
     val result: (Result<List<UniversalBleService>>) -> Unit,
 )
 
 class MtuResultFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val result: (Result<Long>) -> Unit,
 )
 
 class ReadResultFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val characteristicId: String,
     val serviceId: String,
@@ -455,6 +463,7 @@ class ReadResultFuture(
 )
 
 class WriteResultFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val characteristicId: String,
     val serviceId: String,
@@ -462,13 +471,16 @@ class WriteResultFuture(
 )
 
 class SubscriptionResultFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val characteristicId: String,
     val serviceId: String,
+    val previousLocalState: Boolean,
     val result: (Result<Unit>) -> Unit,
 )
 
 class RssiResultFuture(
+    val gatt: BluetoothGatt,
     val deviceId: String,
     val result: (Result<Long>) -> Unit,
 )
