@@ -275,13 +275,9 @@ class UniversalBle {
         timeout: timeout,
       );
 
-      await _platform
-          .disconnect(deviceId)
-          .timeout(timeout)
-          .catchError((error) {
-            if (completer.isCompleted) return;
-            completer.completeError(ConnectionException(error));
-          });
+      await _platform.disconnect(deviceId).timeout(timeout).catchError((error) {
+        throw ConnectionException(error);
+      });
 
       if (connectionState == BleConnectionState.disconnected ||
           connectionState == BleConnectionState.disconnecting) {
@@ -295,12 +291,13 @@ class UniversalBle {
       }
 
       if (await completer.future.timeout(timeout)) {
-        UniversalLogger.logError(
+        throw ConnectionException(
           "Device $deviceId is still connected after disconnect attempt",
         );
       }
     } catch (e) {
       UniversalLogger.logError("Disconnect failed: $e");
+      rethrow;
     }
   }
 
