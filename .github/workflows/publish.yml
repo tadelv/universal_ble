@@ -14,6 +14,7 @@ on:
 # Publish using the reusable workflow from dart-lang.
 jobs:
   publish:
+    if: github.repository == 'Navideck/universal_ble'
     permissions:
       id-token: write # Required for authentication using OIDC
     runs-on: ubuntu-latest
