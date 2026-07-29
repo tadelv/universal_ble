@@ -44,6 +44,24 @@ internal class SafeScannerTest {
     }
 
     @Test
+    fun duplicateStartPreservesActiveScan() {
+        val scanner = mock(BluetoothLeScanner::class.java)
+        val safeScanner = scanner(scanner)
+        val settings = mock(ScanSettings::class.java)
+        val callback = mock(ScanCallback::class.java)
+
+        val duplicateResult = mockStatic(SystemClock::class.java).use { clock ->
+            clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+            assertNull(safeScanner.startScan(emptyList(), settings, callback))
+            safeScanner.startScan(emptyList(), settings, callback)
+        }
+
+        assertEquals(ScanCallback.SCAN_FAILED_ALREADY_STARTED, duplicateResult)
+        assertTrue(safeScanner.isScanning())
+        verify(scanner).startScan(anyList(), eq(settings), any(ScanCallback::class.java))
+    }
+
+    @Test
     fun missingScannerReportsFailure() {
         val safeScanner = scanner(null)
         val callback = mock(ScanCallback::class.java)

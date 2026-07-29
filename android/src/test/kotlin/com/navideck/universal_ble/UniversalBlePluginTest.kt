@@ -18,9 +18,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.eq
+import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.mockConstruction
@@ -261,7 +264,52 @@ internal class UniversalBlePluginTest {
         }
 
         assertNull(result)
-        verify(handler).postDelayed(any(Runnable::class.java), eq(2_000L))
+        verify(handler, times(2)).postDelayed(any(Runnable::class.java), eq(2_000L))
+    }
+
+    @Test
+    fun filteredSystemDeviceDiscoveryClosesOnlyTemporaryGatt() {
+        val plugin = UniversalBlePlugin()
+        val manager = mock(BluetoothManager::class.java)
+        val adapter = mock(BluetoothAdapter::class.java)
+        val handler = handler(runPostedTasks = true)
+        val context = mock(Context::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val temporaryGatt = mock(BluetoothGatt::class.java)
+        val currentGatt = mock(BluetoothGatt::class.java)
+        val currentDevice = mock(BluetoothDevice::class.java)
+        val deviceId = "11:22:33:44:55:66"
+        var gattCallback: BluetoothGattCallback? = null
+        var result: Result<List<UniversalBleScanResult>>? = null
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.setField("context", context)
+        `when`(manager.adapter).thenReturn(adapter)
+        `when`(manager.getConnectedDevices(BluetoothProfile.GATT)).thenReturn(listOf(device))
+        `when`(device.address).thenReturn(deviceId)
+        `when`(currentGatt.device).thenReturn(currentDevice)
+        `when`(currentDevice.address).thenReturn(deviceId)
+        doAnswer {
+            gattCallback = it.arguments[2] as BluetoothGattCallback
+            temporaryGatt
+        }.`when`(device).connectGatt(eq(context), eq(false), any(BluetoothGattCallback::class.java))
+
+        plugin.getSystemDevices(listOf("0000180f-0000-1000-8000-00805f9b34fb")) { result = it }
+        currentGatt.saveCacheIfNeeded()
+
+        try {
+            gattCallback!!.onServicesDiscovered(temporaryGatt, BluetoothGatt.GATT_FAILURE)
+
+            assertTrue(result!!.isSuccess)
+            assertSame(currentGatt, device.address.findGatt())
+            verify(temporaryGatt).disconnect()
+            verify(temporaryGatt).close()
+            verify(currentGatt, never()).disconnect()
+            verify(currentGatt, never()).close()
+        } finally {
+            currentGatt.removeCacheIfCurrent()
+        }
     }
 
     private fun handler(runPostedTasks: Boolean = false): Handler {

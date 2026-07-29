@@ -58,6 +58,8 @@ class SafeScanner(
     }
 
     fun startScan(filters: List<ScanFilter>, settings: ScanSettings, callback: ScanCallback): Int? {
+        if (isScanning) return ScanCallback.SCAN_FAILED_ALREADY_STARTED
+
         val now = SystemClock.elapsedRealtime()
         startTimes.removeAll { now - it > EXCESSIVE_SCANNING_PERIOD_MS }
 

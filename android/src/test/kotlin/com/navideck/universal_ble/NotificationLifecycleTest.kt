@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattService
 import android.os.Handler
 import java.util.UUID
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -125,14 +126,22 @@ internal class NotificationLifecycleTest {
     fun staleReadCannotCompleteCurrentOperation() {
         val old = fixture(save = false)
         val current = fixture(save = false)
-        var completed = false
-        val pending = ReadResultFuture(
+        var oldResult: Result<ByteArray>? = null
+        var currentCompleted = false
+        val oldPending = ReadResultFuture(
+            old.gatt,
+            deviceId,
+            characteristicId,
+            serviceId,
+        ) { oldResult = it }
+        val currentPending = ReadResultFuture(
             current.gatt,
             deviceId,
             characteristicId,
             serviceId,
-        ) { completed = true }
-        current.plugin.field<MutableList<ReadResultFuture>>("readResultFutureList").add(pending)
+        ) { currentCompleted = true }
+        val pendingReads = current.plugin.field<MutableList<ReadResultFuture>>("readResultFutureList")
+        pendingReads.addAll(listOf(oldPending, currentPending))
         old.gatt.saveCacheIfNeeded()
         current.gatt.saveCacheIfNeeded()
 
@@ -143,11 +152,13 @@ internal class NotificationLifecycleTest {
                 byteArrayOf(1),
                 BluetoothGatt.GATT_SUCCESS,
             )
-            assertFalse(completed)
-            assertTrue(
-                current.plugin.field<MutableList<ReadResultFuture>>("readResultFutureList")
-                    .contains(pending)
+            assertEquals(
+                UniversalBleErrorCode.DEVICE_DISCONNECTED.raw.toString(),
+                (oldResult!!.exceptionOrNull() as FlutterError).code,
             )
+            assertFalse(pendingReads.contains(oldPending))
+            assertFalse(currentCompleted)
+            assertTrue(pendingReads.contains(currentPending))
         } finally {
             current.gatt.removeCacheIfCurrent()
         }

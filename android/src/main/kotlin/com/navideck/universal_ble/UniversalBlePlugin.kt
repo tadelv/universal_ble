@@ -61,6 +61,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val writeResultFutureList = mutableListOf<WriteResultFuture>()
     private val subscriptionResultFutureList = mutableListOf<SubscriptionResultFuture>()
     private val localNotificationStates = IdentityHashMap<BluetoothGatt, MutableSet<String>>()
+    private val temporaryDiscoveryCleanups = IdentityHashMap<BluetoothGatt, () -> Unit>()
     private val pairResultFutures = mutableMapOf<String, (Result<Boolean>) -> Unit>()
     private val rssiResultFutureList = mutableListOf<RssiResultFuture>()
     private val autoConnectDevices = mutableSetOf<String>()
@@ -105,6 +106,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         safeScanner.stopScan()
+        disposeTemporaryDiscoveryGatts()
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
         pendingConnects.clear()
         disconnectTimestamps.clear()
@@ -503,7 +505,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         val callbackGatt = gatt ?: return
         val deviceId = callbackGatt.device.address
         completeGattCallback {
-            if (!callbackGatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(callbackGatt)) return@completeGattCallback
             rssiResultFutureList.removeAll {
                 if (it.gatt === callbackGatt && it.deviceId == deviceId) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -559,7 +561,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
 
     override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
         completeGattCallback {
-            if (!gatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(gatt)) return@completeGattCallback
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 discoverServicesFutureList.removeAll {
                     if (it.gatt === gatt && it.deviceId == gatt.device.address) {
@@ -824,7 +826,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         status: Int,
     ) {
         completeGattCallback {
-            if (!gatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(gatt)) return@completeGattCallback
             readResultFutureList.removeAll {
                 if (it.gatt === gatt &&
                     it.deviceId == gatt.device.address &&
@@ -954,7 +956,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     ) {
         val callbackGatt = gatt ?: return
         completeGattCallback {
-            if (!callbackGatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(callbackGatt)) return@completeGattCallback
             val matches = writeResultFutureList.filter {
                 it.gatt === callbackGatt &&
                     it.deviceId == callbackGatt.device.address &&
@@ -1075,7 +1077,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         val callbackGatt = gatt ?: return
         val deviceId = callbackGatt.device.address
         completeGattCallback {
-            if (!callbackGatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(callbackGatt)) return@completeGattCallback
             mtuResultFutureList.removeAll {
                 if (it.gatt === callbackGatt && it.deviceId == deviceId) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -1242,8 +1244,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         var isUpdated = false
         fun updateCallback(uuids: List<String>?) {
             if (isUpdated) return
-            callback(uuids)
             isUpdated = true
+            callback(uuids)
         }
 
         // If its a known gatt, just discover services
@@ -1271,41 +1273,58 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             }
         }
 
-        // Else connect to Gatt, discover services, then disconnect
+        var temporaryGatt: BluetoothGatt? = null
+        var timeout: Runnable? = null
+        fun finish(uuids: List<String>?) {
+            if (isUpdated) return
+            isUpdated = true
+            timeout?.let { mainThreadHandler?.removeCallbacks(it) }
+            temporaryGatt?.let { gatt ->
+                temporaryDiscoveryCleanups.remove(gatt)
+                try {
+                    gatt.disconnect()
+                } catch (e: Exception) {
+                    UniversalBleLogger.logError("Failed to disconnect temporary gatt for ${device.address}: $e")
+                }
+                try {
+                    gatt.close()
+                } catch (e: Exception) {
+                    UniversalBleLogger.logError("Failed to close temporary gatt for ${device.address}: $e")
+                }
+            }
+            callback(uuids)
+        }
+
         val callbackHandler = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
                 completeGattCallback {
+                    if (gatt !== temporaryGatt) return@completeGattCallback
                     if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothGatt.STATE_CONNECTED) {
                         if (gatt?.discoverServices() == true) return@completeGattCallback
-                        updateCallback(null)
-                        if (!device.address.isKnownGatt()) {
-                            gatt?.disconnect()
-                        }
+                        finish(null)
                     } else {
-                        updateCallback(null)
+                        finish(null)
                     }
                 }
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
                 completeGattCallback {
+                    if (gatt !== temporaryGatt) return@completeGattCallback
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         val uuids = gatt?.services?.map { it.uuid.toString() }
                         if (uuids != null) {
                             setCachedServices(device.address, uuids)
                         }
-                        updateCallback(uuids)
+                        finish(uuids)
                     } else {
-                        updateCallback(null)
-                    }
-                    if (!device.address.isKnownGatt()) {
-                        gatt?.disconnect()
+                        finish(null)
                     }
                 }
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        temporaryGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             device.connectGatt(
                 context,
                 false,
@@ -1319,6 +1338,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         } else {
             device.connectGatt(context, false, callbackHandler)
         }
+        temporaryGatt?.let { gatt ->
+            temporaryDiscoveryCleanups[gatt] = { finish(null) }
+            timeout = Runnable { finish(null) }
+            mainThreadHandler?.postDelayed(requireNotNull(timeout), 2000L)
+        } ?: finish(null)
+    }
+
+    private fun disposeTemporaryDiscoveryGatts() {
+        temporaryDiscoveryCleanups.values.toList().forEach { it() }
     }
 
     private fun cleanUpConnections(deviceId: String) {
@@ -1337,6 +1365,12 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             .forEach {
                 if (seen.put(it, Unit) == null) cleanUpConnection(it)
             }
+    }
+
+    private fun cleanUpIfStale(gatt: BluetoothGatt): Boolean {
+        if (gatt.isCurrentGatt()) return false
+        cleanUpConnection(gatt)
+        return true
     }
 
     private fun cleanUpConnection(gatt: BluetoothGatt) {
@@ -1440,6 +1474,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     // goes down, so fail them here and close the GATT clients — leaked
     // clients (capped at 32 system-wide) later surface as GATT 133.
     private fun cleanUpOnAdapterOff() {
+        disposeTemporaryDiscoveryGatts()
         val pendingDeviceIds = pendingConnects.keys.toList()
         val knownGatts = allKnownGatts()
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
@@ -1646,7 +1681,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     ) {
         completeGattCallback {
             val callbackGatt = gatt ?: return@completeGattCallback
-            if (!callbackGatt.isCurrentGatt()) return@completeGattCallback
+            if (cleanUpIfStale(callbackGatt)) return@completeGattCallback
             val callbackDescriptor = descriptor ?: return@completeGattCallback
             if (callbackDescriptor.uuid.toString() == ccdCharacteristic.toString()) {
                 updateSubscriptionState(callbackGatt, callbackDescriptor.characteristic, status)
