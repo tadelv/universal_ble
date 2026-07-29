@@ -1,3 +1,10 @@
+## 2.2.4
+
+* Android: serialize GATT state and callback completion on the main handler, close temporary service-discovery clients on every terminal path, and isolate pending operations from stale GATT instances.
+* Android: enable local notification routing before CCCD writes and restore it when descriptor setup fails.
+* Android: report synchronous scan-start failures to callers, keep scan state truthful across failures and duplicate starts, and use monotonic scan throttling.
+* Propagate disconnect failures and timeouts to callers instead of completing successfully.
+
 ## 2.2.3
 
 * Android: enforce a two-second gap between GATT disconnect and reconnect, measured from the latest disconnect event.
