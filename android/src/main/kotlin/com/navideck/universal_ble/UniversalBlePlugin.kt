@@ -224,7 +224,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
 
         val usesCustomFilters = filter?.usesCustomFilters() ?: false
 
-        try {
+        val errorCode = try {
             val filterServices = filter?.withServices?.toUUIDList() ?: emptyList()
             var scanFilters = emptyList<ScanFilter>()
 
@@ -248,6 +248,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 details = e.toString()
             )
         }
+        if (errorCode != null) throw createFlutterError(
+            UniversalBleErrorCode.SCAN_FAILED,
+            errorCode.parseScanErrorMessage(),
+            details = errorCode.toString()
+        )
     }
 
     override fun stopScan() {

@@ -10,7 +10,9 @@ import android.os.Handler
 import android.os.SystemClock
 import android.util.Log
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyList
@@ -19,6 +21,7 @@ import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.mockStatic
+import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
@@ -33,7 +36,7 @@ internal class SafeScannerTest {
 
         mockStatic(SystemClock::class.java).use { clock ->
             clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
-            safeScanner.startScan(emptyList(), settings, callback)
+            assertNull(safeScanner.startScan(emptyList(), settings, callback))
         }
 
         assertTrue(safeScanner.isScanning())
@@ -47,11 +50,14 @@ internal class SafeScannerTest {
 
         mockStatic(SystemClock::class.java).use { clock ->
             clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
-            safeScanner.startScan(emptyList(), mock(ScanSettings::class.java), callback)
+            assertEquals(
+                ScanCallback.SCAN_FAILED_INTERNAL_ERROR,
+                safeScanner.startScan(emptyList(), mock(ScanSettings::class.java), callback),
+            )
         }
 
         assertFalse(safeScanner.isScanning())
-        verify(callback).onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
+        verify(callback, never()).onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
     }
 
     @Test
@@ -66,12 +72,15 @@ internal class SafeScannerTest {
         mockStatic(SystemClock::class.java).use { clock ->
             clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
             mockStatic(Log::class.java).use {
-                safeScanner.startScan(emptyList(), settings, callback)
+                assertEquals(
+                    ScanCallback.SCAN_FAILED_INTERNAL_ERROR,
+                    safeScanner.startScan(emptyList(), settings, callback),
+                )
             }
         }
 
         assertFalse(safeScanner.isScanning())
-        verify(callback).onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
+        verify(callback, never()).onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
     }
 
     @Test

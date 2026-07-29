@@ -6,16 +6,24 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Handler
 import android.os.SystemClock
+import android.util.Log
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.eq
+import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockConstruction
 import org.mockito.Mockito.mockStatic
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
@@ -23,6 +31,50 @@ import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 
 internal class UniversalBlePluginTest {
+    @Test
+    fun missingScannerFailsStartScan() {
+        val plugin = scanPlugin(null)
+        val settings = mock(ScanSettings::class.java)
+
+        val error = mockStatic(SystemClock::class.java).use { clock ->
+            clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+            mockConstruction(ScanSettings.Builder::class.java) { builder, _ ->
+                `when`(builder.build()).thenReturn(settings)
+            }.use {
+                assertFailsWith<FlutterError> { plugin.startScan(null, null) }
+            }
+        }
+
+        assertEquals(UniversalBleErrorCode.SCAN_FAILED.raw.toString(), error.code)
+        assertEquals(ScanCallback.SCAN_FAILED_INTERNAL_ERROR.toString(), error.details)
+    }
+
+    @Test
+    fun synchronousScannerFailureFailsStartScan() {
+        val scanner = mock(BluetoothLeScanner::class.java)
+        val plugin = scanPlugin(scanner)
+        doThrow(IllegalStateException("failed")).`when`(scanner).startScan(
+            anyList(),
+            any(ScanSettings::class.java),
+            any(ScanCallback::class.java),
+        )
+        val settings = mock(ScanSettings::class.java)
+
+        val error = mockStatic(SystemClock::class.java).use { clock ->
+            clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+            mockConstruction(ScanSettings.Builder::class.java) { builder, _ ->
+                `when`(builder.build()).thenReturn(settings)
+            }.use {
+                mockStatic(Log::class.java).use {
+                    assertFailsWith<FlutterError> { plugin.startScan(null, null) }
+                }
+            }
+        }
+
+        assertEquals(UniversalBleErrorCode.SCAN_FAILED.raw.toString(), error.code)
+        assertEquals(ScanCallback.SCAN_FAILED_INTERNAL_ERROR.toString(), error.details)
+    }
+
     @Test
     fun connectedCallbackCancelsPendingReconnect() {
         val plugin = UniversalBlePlugin()
@@ -214,6 +266,18 @@ internal class UniversalBlePluginTest {
             true
         }
         return handler
+    }
+
+    private fun scanPlugin(scanner: BluetoothLeScanner?): UniversalBlePlugin {
+        val plugin = UniversalBlePlugin()
+        val manager = mock(BluetoothManager::class.java)
+        val adapter = mock(BluetoothAdapter::class.java)
+        `when`(manager.adapter).thenReturn(adapter)
+        `when`(adapter.isEnabled).thenReturn(true)
+        `when`(adapter.bluetoothLeScanner).thenReturn(scanner)
+        plugin.setField("bluetoothManager", manager)
+        plugin.setField("safeScanner", SafeScanner(manager, handler()))
+        return plugin
     }
 
     @Suppress("UNCHECKED_CAST")

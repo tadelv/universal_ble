@@ -57,14 +57,14 @@ class SafeScanner(
         }
     }
 
-    fun startScan(filters: List<ScanFilter>, settings: ScanSettings, callback: ScanCallback) {
+    fun startScan(filters: List<ScanFilter>, settings: ScanSettings, callback: ScanCallback): Int? {
         val now = SystemClock.elapsedRealtime()
         startTimes.removeAll { now - it > EXCESSIVE_SCANNING_PERIOD_MS }
 
         if (startTimes.size >= NUM_SCAN_DURATIONS_KEPT) {
             if (awaitingScan) {
                 Log.e(TAG, "startScan: too frequent, awaiting scan..")
-                return
+                return null
             }
 
             awaitingScan = true
@@ -77,25 +77,26 @@ class SafeScanner(
             handler.postDelayed({
                 Log.d(TAG, "Retrying scan after delay")
                 awaitingScan = false
-                startScan(filters, settings, callback)
+                startScan(filters, settings, callback)?.let(callback::onScanFailed)
             }, delay)
+            return null
         } else {
             awaitingScan = false
             val scanner = bluetoothManager.adapter.bluetoothLeScanner
             if (scanner == null) {
                 isScanning = false
-                callback.onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
-                return
+                return ScanCallback.SCAN_FAILED_INTERNAL_ERROR
             }
             try {
                 resultCallback = callback
                 scanner.startScan(filters, settings, scanCallback)
                 startTimes.addLast(now)
                 isScanning = true
+                return null
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start Scan : $e")
                 isScanning = false
-                callback.onScanFailed(ScanCallback.SCAN_FAILED_INTERNAL_ERROR)
+                return ScanCallback.SCAN_FAILED_INTERNAL_ERROR
             }
         }
     }
