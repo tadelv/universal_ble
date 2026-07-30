@@ -366,6 +366,7 @@ enum UniversalBleErrorCode: Int {
   case scanFailed = 59
   case stoppingScanInProgress = 60
   case webBluetoothGloballyDisabled = 61
+  case servicesNotResolved = 62
 }
 
 /// Shared models & enums

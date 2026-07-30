@@ -247,7 +247,8 @@ enum class UniversalBleErrorCode {
   kAlreadyUnpaired = 58,
   kScanFailed = 59,
   kStoppingScanInProgress = 60,
-  kWebBluetoothGloballyDisabled = 61
+  kWebBluetoothGloballyDisabled = 61,
+  kServicesNotResolved = 62
 };
 
 

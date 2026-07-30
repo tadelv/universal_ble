@@ -1,3 +1,9 @@
+## 2.2.5
+
+* Rebuild the Linux BlueZ runtime after D-Bus owner replacement.
+* Add bounded Linux service discovery and `servicesNotResolved` errors.
+* Support Linux GATT cache reset while preserving paired devices.
+
 ## 2.2.4
 
 * Android: serialize GATT state and callback completion on the main handler, close temporary service-discovery clients on every terminal path, and isolate pending operations from stale GATT instances.
