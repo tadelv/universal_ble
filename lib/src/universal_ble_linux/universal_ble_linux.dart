@@ -19,7 +19,7 @@ class BluezOwnerChange {
 }
 
 class UniversalBleLinux extends UniversalBlePlatform {
-  static const _ownerChangeSettle = Duration(milliseconds: 100);
+  static const _ownerChangeSettle = Duration(milliseconds: 20);
 
   UniversalBleLinux({
     BlueZClient Function()? clientFactory,
