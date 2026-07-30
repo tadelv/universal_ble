@@ -809,6 +809,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<void> _evictDevice(BlueZDevice device) async {
     final key = device.address.toLowerCase();
     if (!identical(_devices[key], device)) return;
+    _devices.remove(key);
     if (device.connected) updateConnection(device.address, false);
     final updateSubscription = _deviceUpdateStreamSubscriptions.remove(key);
     final advertisementSubscription = _deviceAdvertisementSubscriptions.remove(
@@ -827,9 +828,6 @@ class UniversalBleLinux extends UniversalBlePlatform {
         (subscription) => subscription.cancel(),
       ),
     ]);
-    if (identical(_devices[key], device)) {
-      _devices.remove(key);
-    }
   }
 
   Future<void> _teardownRuntime() async {

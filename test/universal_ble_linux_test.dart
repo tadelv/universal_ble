@@ -271,6 +271,30 @@ void main() {
   );
 
   test(
+    'device removal allows an immediate same-path replacement',
+    () async {
+      await plugin.getBluetoothAvailabilityState();
+      await bluezService.unregisterObject(device);
+      device = _DeviceObject(paired: false, connected: false);
+      await bluezService.registerObject(device);
+
+      BleConnectionState? state;
+      for (var i = 0; i < 100; i++) {
+        try {
+          state = await plugin.getConnectionState('AA:BB:CC:DD:EE:FF');
+          if (state == BleConnectionState.disconnected) break;
+        } on UniversalBleException {
+          state = null;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(state, BleConnectionState.disconnected);
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
     'runtime loss during service discovery reports disconnected',
     () async {
       await plugin.getBluetoothAvailabilityState();
