@@ -92,11 +92,14 @@ void main() {
   late UniversalBleLinux plugin;
   var clientsCreated = 0;
 
-  Future<void> pumpUntil(bool Function() condition) async {
+  Future<void> pumpUntil(
+    bool Function() condition, {
+    String Function()? reason,
+  }) async {
     for (var i = 0; i < 100 && !condition(); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
-    expect(condition(), isTrue);
+    expect(condition(), isTrue, reason: reason?.call());
   }
 
   setUp(() async {
@@ -169,7 +172,11 @@ void main() {
       for (var i = 2; i <= 10; i++) {
         owners.add(BluezOwnerChange(':1.${i - 1}', ':1.$i'));
       }
-      await pumpUntil(() => clientsCreated == 2 && plugin.isInitialized);
+      await pumpUntil(
+        () => clientsCreated == 2 && plugin.isInitialized,
+        reason: () =>
+            'clientsCreated=$clientsCreated, initialized=${plugin.isInitialized}',
+      );
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
       expect(clientsCreated, 2);

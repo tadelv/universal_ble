@@ -19,7 +19,7 @@ class BluezOwnerChange {
 }
 
 class UniversalBleLinux extends UniversalBlePlatform {
-  static const _ownerChangeSettle = Duration(milliseconds: 20);
+  static const _ownerChangeSettle = Duration(milliseconds: 100);
 
   UniversalBleLinux({
     BlueZClient Function()? clientFactory,
@@ -710,9 +710,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
         'BleAdapter: ${selected.name} - ${selected.address}',
       );
     }
-    final stale = _devices.values
-        .where((device) => device.adapter.address != selected?.address)
-        .toList(growable: false);
+    final stale = _devices.values.toList(growable: false);
     for (final device in stale) {
       await _evictDevice(device);
       if (generation != _runtimeGeneration) return;
