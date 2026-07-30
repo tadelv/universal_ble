@@ -275,21 +275,21 @@ void main() {
     () async {
       await plugin.getBluetoothAvailabilityState();
       await bluezService.unregisterObject(device);
-      device = _DeviceObject(paired: false, connected: false);
+      device = _DeviceObject(paired: true, connected: false);
       await bluezService.registerObject(device);
 
-      BleConnectionState? state;
+      bool? paired;
       for (var i = 0; i < 100; i++) {
         try {
-          state = await plugin.getConnectionState('AA:BB:CC:DD:EE:FF');
-          if (state == BleConnectionState.disconnected) break;
+          paired = await plugin.isPaired('AA:BB:CC:DD:EE:FF');
+          if (paired == true) break;
         } on UniversalBleException {
-          state = null;
+          paired = null;
         }
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
 
-      expect(state, BleConnectionState.disconnected);
+      expect(paired, isTrue);
     },
     skip: Platform.isWindows,
   );
