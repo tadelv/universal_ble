@@ -265,6 +265,7 @@ enum UniversalBleErrorCode {
   scanFailed,
   stoppingScanInProgress,
   webBluetoothGloballyDisabled,
+  servicesNotResolved,
 }
 
 /// Shared models & enums

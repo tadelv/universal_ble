@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluez/bluez.dart';
+import 'package:dbus/dbus.dart';
 import 'package:flutter/services.dart';
 import 'package:universal_ble/src/models/model_exports.dart';
 import 'package:universal_ble/src/utils/universal_ble_error_parser.dart';
@@ -10,19 +11,60 @@ import 'package:universal_ble/src/interfaces/universal_ble_platform_interface.da
 import 'package:universal_ble/src/utils/universal_logger.dart';
 import 'package:universal_ble/src/universal_ble_exceptions.dart';
 
+class BluezOwnerChange {
+  const BluezOwnerChange(this.oldOwner, this.newOwner);
+
+  final String? oldOwner;
+  final String? newOwner;
+}
+
 class UniversalBleLinux extends UniversalBlePlatform {
-  UniversalBleLinux._();
+  static const _ownerChangeSettle = Duration(milliseconds: 20);
+
+  UniversalBleLinux({
+    BlueZClient Function()? clientFactory,
+    Stream<BluezOwnerChange>? ownerChanges,
+    Future<String?> Function()? currentOwner,
+  }) : _clientFactory = clientFactory ?? BlueZClient.new {
+    if (ownerChanges != null && currentOwner != null) {
+      _ownerChanges = ownerChanges;
+      _currentOwner = currentOwner;
+      return;
+    }
+    final bus = DBusClient.system();
+    _ownerBus = bus;
+    _ownerChanges = bus.nameOwnerChanged
+        .where((event) => event.name == 'org.bluez')
+        .map((event) => BluezOwnerChange(event.oldOwner, event.newOwner));
+    _currentOwner = () => bus.getNameOwner('org.bluez');
+  }
+
   static UniversalBleLinux? _instance;
-  static UniversalBleLinux get instance => _instance ??= UniversalBleLinux._();
+  static UniversalBleLinux get instance => _instance ??= UniversalBleLinux();
 
   bool isInitialized = false;
 
-  final BlueZClient _client = BlueZClient();
+  final BlueZClient Function() _clientFactory;
+  late final Stream<BluezOwnerChange> _ownerChanges;
+  late final Future<String?> Function() _currentOwner;
+  DBusClient? _ownerBus;
+  BlueZClient? _client;
+  String? _owner;
+  BluezOwnerChange? _pendingOwnerChange;
+  Future<void>? _ownerChangeDrain;
   late final UniversalBleFilterUtil _bleFilter = UniversalBleFilterUtil();
   BlueZAdapter? _activeAdapter;
+  String? _selectedAdapterAddress;
+  final Map<String, BlueZAdapter> _adapters = {};
+  StreamSubscription<BluezOwnerChange>? _ownerSubscription;
+  StreamSubscription<BlueZAdapter>? _adapterAdded;
+  StreamSubscription<BlueZAdapter>? _adapterRemoved;
+  StreamSubscription<List<String>>? _adapterProperties;
   StreamSubscription? _deviceAdded;
   StreamSubscription? _deviceRemoved;
-  Completer<void>? _initializationCompleter;
+  Future<void>? _initializationFuture;
+  int _runtimeGeneration = 0;
+  bool _isScanActive = false;
   final Map<String, BlueZDevice> _devices = {};
   final Map<String, StreamSubscription> _deviceUpdateStreamSubscriptions = {};
   final Map<String, StreamSubscription> _deviceAdvertisementSubscriptions = {};
@@ -34,10 +76,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<AvailabilityState> getBluetoothAvailabilityState() async {
     await _ensureInitialized();
 
-    BlueZAdapter? adapter = _activeAdapter;
-    if (adapter == null) {
-      return AvailabilityState.unsupported;
-    }
+    final adapter = _activeAdapter;
+    if (adapter == null) return AvailabilityState.unknown;
     return adapter.powered
         ? AvailabilityState.poweredOn
         : AvailabilityState.poweredOff;
@@ -84,19 +124,14 @@ class UniversalBleLinux extends UniversalBlePlatform {
       throw "Adapter not available";
     }
 
-    // Stop scan and clean all old advertisement listeners
     await stopScan();
 
     _bleFilter.scanFilter = scanFilter;
-
-    // Setup listeners
-    _deviceAdded ??= _client.deviceAdded.listen(_onDeviceAdd);
-    _deviceRemoved ??= _client.deviceRemoved.listen(_onDeviceRemoved);
-
+    _isScanActive = true;
     await adapter.startDiscovery();
 
-    for (var device in _client.devices) {
-      _onDeviceAdd(device);
+    for (final device in _client?.devices ?? const <BlueZDevice>[]) {
+      await _onDeviceAdd(device, _runtimeGeneration);
     }
   }
 
@@ -104,22 +139,14 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<void> stopScan() async {
     await _ensureInitialized();
     try {
-      // Dispose listeners
-      _deviceAdded?.cancel();
-      _deviceRemoved?.cancel();
-      _deviceAdded = null;
-      _deviceRemoved = null;
-
-      // Stop Discovery
+      _isScanActive = false;
       if (_activeAdapter?.discovering == true) {
         await _activeAdapter?.stopDiscovery();
       }
-
-      // Clean all advertisement listeners
-      _deviceAdvertisementSubscriptions.removeWhere((e, value) {
-        value.cancel();
-        return true;
-      });
+      await Future.wait(
+        _deviceAdvertisementSubscriptions.values.map((s) => s.cancel()),
+      );
+      _deviceAdvertisementSubscriptions.clear();
     } catch (e) {
       UniversalLogger.logError("stopScan error: $e");
     }
@@ -167,41 +194,34 @@ class UniversalBleLinux extends UniversalBlePlatform {
   }
 
   @override
+  Future<void> clearGattCache(String deviceId) async {
+    final device = _findDeviceById(deviceId);
+    final paired = device.paired;
+    try {
+      if (device.connected) await device.disconnect();
+    } catch (e) {
+      UniversalLogger.logInfo('clearGattCache disconnect failed: $e');
+    }
+    await _evictDevice(device);
+    if (!paired) await device.adapter.removeDevice(device);
+  }
+
+  @override
   Future<List<BleService>> discoverServices(
     String deviceId,
     bool withDescriptors,
   ) async {
     final device = _findDeviceById(deviceId);
-    if (device.gattServices.isEmpty && !device.servicesResolved) {
-      await device.propertiesChanged
-          .firstWhere((element) {
-            if (element.contains(BluezProperty.connected)) {
-              if (!device.connected) {
-                UniversalLogger.logInfo(
-                  "DiscoverServicesFailed: Device disconnected",
-                );
-                return true;
-              }
-            }
-            return element.contains(BluezProperty.servicesResolved);
-          })
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              UniversalLogger.logInfo("DiscoverServicesFailed: Timeout");
-              return [];
-            },
-          );
-    }
-
-    // Few ble devices requires delay to perform operations after discovering services
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (device.gattServices.isEmpty && !device.servicesResolved) {
-      throw UniversalBleException(
-        code: UniversalBleErrorCode.failed,
-        message: "Failed to resolve services",
-      );
+    if (!device.servicesResolved) {
+      await _waitForServices(device);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!device.connected ||
+          !identical(_devices[device.address.toLowerCase()], device)) {
+        throw UniversalBleException(
+          code: UniversalBleErrorCode.deviceDisconnected,
+          message: 'Device disconnected while resolving services',
+        );
+      }
     }
 
     List<BleService> services = [];
@@ -268,8 +288,11 @@ class UniversalBleLinux extends UniversalBlePlatform {
       withTimestamp: true,
     );
     final char = _getCharacteristic(deviceId, service, characteristic);
+    final device = _findDeviceById(deviceId);
+    final generation = _runtimeGeneration;
 
-    String characteristicKey = "${deviceId}_${service}_$characteristic";
+    String characteristicKey =
+        "${deviceId.toLowerCase()}_${service}_$characteristic";
 
     if (bleInputProperty != BleInputProperty.disabled) {
       if (char.notifying) {
@@ -286,6 +309,10 @@ class UniversalBleLinux extends UniversalBlePlatform {
       _characteristicPropertiesSubscriptions[characteristicKey] = char
           .propertiesChanged
           .listen((List<String> properties) {
+            if (generation != _runtimeGeneration ||
+                !identical(_devices[deviceId.toLowerCase()], device)) {
+              return;
+            }
             for (String property in properties) {
               switch (property) {
                 case BluezProperty.value:
@@ -448,7 +475,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
   @override
   Future<List<BleDevice>> getSystemDevices(List<String>? withServices) async {
     await _ensureInitialized();
-    List<BlueZDevice> devices = _client.devices
+    List<BlueZDevice> devices = (_client?.devices ?? const <BlueZDevice>[])
+        .where((device) => device.adapter.address == _activeAdapter?.address)
         .where((device) => device.connected)
         .toList();
     if (withServices != null && withServices.isNotEmpty) {
@@ -471,7 +499,9 @@ class UniversalBleLinux extends UniversalBlePlatform {
   }
 
   AvailabilityState get _availabilityState {
-    return _activeAdapter?.powered == true
+    final adapter = _activeAdapter;
+    if (adapter == null) return AvailabilityState.unknown;
+    return adapter.powered
         ? AvailabilityState.poweredOn
         : AvailabilityState.poweredOff;
   }
@@ -491,121 +521,252 @@ class UniversalBleLinux extends UniversalBlePlatform {
 
   /// Get device by id from cache or from client
   BlueZDevice? _getDeviceById(String deviceId) {
-    return _devices[deviceId] ??
-        _client.devices.cast<BlueZDevice?>().firstWhere(
-          (device) => device?.address == deviceId,
-          orElse: () => null,
-        );
+    return _devices[deviceId.toLowerCase()];
   }
 
   Future<void> _ensureInitialized() async {
-    if (isInitialized) return;
+    await _ensureOwnerMonitoring();
+    final ownerChangeDrain = _ownerChangeDrain;
+    if (ownerChangeDrain != null) await ownerChangeDrain;
+    await _ensureRuntimeInitialized();
+  }
 
-    if (_initializationCompleter != null) {
-      await _initializationCompleter?.future;
-      return;
+  Future<void> _ensureRuntimeInitialized() async {
+    if (_owner == null || isInitialized) return;
+    final existing = _initializationFuture;
+    if (existing != null) return existing;
+    late final Future<void> initialization;
+    initialization = _initializeRuntime().whenComplete(() {
+      if (identical(_initializationFuture, initialization)) {
+        _initializationFuture = null;
+      }
+    });
+    _initializationFuture = initialization;
+    return initialization;
+  }
+
+  Future<void> _ensureOwnerMonitoring() async {
+    if (_ownerSubscription != null) return;
+    var eventGeneration = 0;
+    _ownerSubscription = _ownerChanges.listen((change) {
+      eventGeneration++;
+      unawaited(_queueOwnerChange(change));
+    });
+    final lookupGeneration = eventGeneration;
+    final owner = await _currentOwner();
+    if (lookupGeneration == eventGeneration) {
+      await _queueOwnerChange(BluezOwnerChange(null, owner));
+    } else {
+      await _ownerChangeDrain;
     }
+  }
 
-    _initializationCompleter = Completer<void>();
-    try {
-      await _client.connect();
-      await _waitForAdapter(_client);
+  Future<void> _queueOwnerChange(BluezOwnerChange change) {
+    _pendingOwnerChange = change;
+    final existing = _ownerChangeDrain;
+    if (existing != null) return existing;
+    late final Future<void> drain;
+    drain = Future<void>(_drainOwnerChanges).whenComplete(() {
+      if (identical(_ownerChangeDrain, drain)) _ownerChangeDrain = null;
+    });
+    _ownerChangeDrain = drain;
+    return drain;
+  }
 
-      _activeAdapter ??= _client.adapters.first;
+  Future<void> _drainOwnerChanges() async {
+    while (_pendingOwnerChange != null) {
+      final change = await _takeLatestOwnerChange();
+      final nextOwner = change.newOwner?.isEmpty == true
+          ? null
+          : change.newOwner;
+      if (nextOwner == _owner) continue;
+      _owner = nextOwner;
+      await _teardownRuntime();
+      while (_pendingOwnerChange != null) {
+        final latest = await _takeLatestOwnerChange();
+        _owner = latest.newOwner?.isEmpty == true ? null : latest.newOwner;
+      }
+      if (_owner != null) await _ensureRuntimeInitialized();
+    }
+  }
 
-      UniversalLogger.logInfo(
-        'BleAdapter: ${_activeAdapter?.name} - ${_activeAdapter?.address}',
-      );
+  Future<BluezOwnerChange> _takeLatestOwnerChange() async {
+    var latest = _pendingOwnerChange!;
+    _pendingOwnerChange = null;
+    await Future<void>.delayed(_ownerChangeSettle);
+    while (_pendingOwnerChange != null) {
+      latest = _pendingOwnerChange!;
+      _pendingOwnerChange = null;
+      await Future<void>.delayed(_ownerChangeSettle);
+    }
+    return latest;
+  }
 
-      _activeAdapter?.propertiesChanged.listen((List<String> properties) {
-        // Handle pairing state change
-        for (final property in properties) {
-          switch (property) {
-            case BluezProperty.powered:
-              updateAvailability(_availabilityState);
-              break;
-            case BluezProperty.discoverable:
-            case BluezProperty.discovering:
-              //  print("Adapter Discovering: ${_activeAdapter?.discovering}");
-              break;
-            case BluezProperty.propertyClass:
-            default:
-              UniversalLogger.logInfo("UnhandledPropertyChanged: $property");
-          }
+  Future<void> _initializeRuntime() async {
+    final generation = ++_runtimeGeneration;
+    final client = _clientFactory();
+    _client = client;
+    _adapterAdded = client.adapterAdded.listen((adapter) {
+      if (generation != _runtimeGeneration) return;
+      _adapters[adapter.address] = adapter;
+      unawaited(_selectAdapter(generation));
+    });
+    _adapterRemoved = client.adapterRemoved.listen((adapter) {
+      if (generation != _runtimeGeneration) return;
+      _adapters.remove(adapter.address);
+      unawaited(_selectAdapter(generation));
+    });
+    _deviceAdded = client.deviceAdded.listen((device) {
+      unawaited(_onDeviceAdd(device, generation));
+    });
+    _deviceRemoved = client.deviceRemoved.listen((device) {
+      if (generation != _runtimeGeneration) return;
+      for (final cached in _devices.values) {
+        if (cached.path == device.path) {
+          unawaited(_evictDevice(cached));
+          return;
         }
-      });
-
-      updateAvailability(_availabilityState);
+      }
+    });
+    try {
+      await client.connect();
+      if (generation != _runtimeGeneration) return;
+      for (final adapter in client.adapters) {
+        _adapters[adapter.address] = adapter;
+      }
+      await _waitForAdapter(client, generation);
+      if (generation != _runtimeGeneration) return;
+      await _selectAdapter(generation);
+      for (final device in client.devices) {
+        await _onDeviceAdd(device, generation);
+      }
+      if (generation != _runtimeGeneration) return;
       isInitialized = true;
-      _initializationCompleter?.complete();
-      _initializationCompleter = null;
+      updateAvailability(_availabilityState);
     } catch (e) {
-      UniversalLogger.logError('Error initializing: $e');
-      _initializationCompleter?.completeError(e);
-      await _client.close();
+      if (generation == _runtimeGeneration) {
+        UniversalLogger.logError('Error initializing: $e');
+        await _teardownRuntime();
+      }
       rethrow;
     }
   }
 
-  Future<void> _waitForAdapter(BlueZClient client) async {
-    if (client.adapters.isNotEmpty) return;
-
-    int attempts = 0;
-    while (attempts < 10 && client.adapters.isEmpty) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      attempts++;
-    }
-
-    if (client.adapters.isEmpty) {
-      throw UniversalBleException(
-        code: UniversalBleErrorCode.bluetoothNotAvailable,
-        message: 'Bluetooth adapter unavailable',
-      );
+  Future<void> _waitForAdapter(BlueZClient client, int generation) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (generation == _runtimeGeneration &&
+        client.adapters.isEmpty &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
 
-  void _onDeviceAdd(BlueZDevice device) {
-    BleDevice bleDevice = device.toBleDevice();
-    if (!_bleFilter.shouldAcceptDevice(bleDevice)) {
+  Future<void> _selectAdapter(int generation) async {
+    if (generation != _runtimeGeneration) return;
+    final current = _activeAdapter;
+    final previous = _selectedAdapterAddress;
+    final adapters = _adapters.values.toList(growable: false);
+    final selected =
+        current?.powered == true &&
+            adapters.any((adapter) => identical(adapter, current))
+        ? current
+        : adapters.cast<BlueZAdapter?>().firstWhere(
+                (adapter) =>
+                    adapter?.address == previous && adapter?.powered == true,
+                orElse: () => null,
+              ) ??
+              adapters.cast<BlueZAdapter?>().firstWhere(
+                (adapter) => adapter?.powered == true,
+                orElse: () => null,
+              ) ??
+              adapters.cast<BlueZAdapter?>().firstWhere(
+                (adapter) => adapter?.address == previous,
+                orElse: () => null,
+              ) ??
+              adapters.cast<BlueZAdapter?>().firstWhere(
+                (_) => true,
+                orElse: () => null,
+              );
+    if (identical(selected, current)) {
+      updateAvailability(_availabilityState);
       return;
     }
+    await _adapterProperties?.cancel();
+    if (generation != _runtimeGeneration) return;
+    _adapterProperties = null;
+    _activeAdapter = selected;
+    if (selected != null) {
+      _selectedAdapterAddress = selected.address;
+      _adapterProperties = selected.propertiesChanged.listen((properties) {
+        if (generation != _runtimeGeneration ||
+            !identical(_activeAdapter, selected)) {
+          return;
+        }
+        if (properties.contains(BluezProperty.powered)) {
+          unawaited(_selectAdapter(generation));
+        }
+      });
+      UniversalLogger.logInfo(
+        'BleAdapter: ${selected.name} - ${selected.address}',
+      );
+    }
+    final stale = _devices.values.toList(growable: false);
+    for (final device in stale) {
+      await _evictDevice(device);
+      if (generation != _runtimeGeneration) return;
+    }
+    updateAvailability(_availabilityState);
+  }
 
-    // Update scan results only if rssi is available
-    if (device.rssi != 0) {
+  Future<void> _onDeviceAdd(BlueZDevice device, int generation) async {
+    if (generation != _runtimeGeneration ||
+        device.adapter.address != _activeAdapter?.address) {
+      return;
+    }
+    final key = device.address.toLowerCase();
+    final previous = _devices[key];
+    if (previous != null && previous.path == device.path) {
+      final bleDevice = previous.toBleDevice();
+      if (_isScanActive &&
+          previous.rssi != 0 &&
+          _bleFilter.shouldAcceptDevice(bleDevice)) {
+        updateScanResult(bleDevice);
+      }
+      if (_isScanActive) _listenForAdvertisements(previous, generation);
+      return;
+    }
+    if (previous != null) {
+      await _evictDevice(previous);
+    }
+    if (generation != _runtimeGeneration ||
+        device.adapter.address != _activeAdapter?.address) {
+      return;
+    }
+    _devices[key] = device;
+    final bleDevice = device.toBleDevice();
+    if (_isScanActive &&
+        device.rssi != 0 &&
+        _bleFilter.shouldAcceptDevice(bleDevice)) {
       updateScanResult(bleDevice);
     }
 
-    // Setup Cache
-    _devices[device.address] = device;
+    if (_isScanActive) _listenForAdvertisements(device, generation);
 
-    // Setup advertisements Listener
-    _deviceAdvertisementSubscriptions[device.address] ??= device
-        .propertiesChanged
-        .where((e) {
-          return e.contains(BluezProperty.rssi) ||
-              e.contains(BluezProperty.manufacturerData) ||
-              e.contains(BluezProperty.uuids) ||
-              e.contains(BluezProperty.serviceData);
-        })
-        .listen((_) {
-          if (_bleFilter.shouldAcceptDevice(bleDevice)) {
-            updateScanResult(device.toBleDevice());
-          }
-        });
-
-    // Setup update listener
-    _deviceUpdateStreamSubscriptions[device
-        .address] ??= device.propertiesChanged.listen((properties) {
+    _deviceUpdateStreamSubscriptions[key] ??= device.propertiesChanged.listen((
+      properties,
+    ) {
+      if (generation != _runtimeGeneration ||
+          !identical(_devices[key], device)) {
+        return;
+      }
       for (final property in properties) {
         switch (property) {
-          // Connection/Pair updates
           case BluezProperty.connected:
             updateConnection(device.address, device.connected);
             break;
           case BluezProperty.paired:
             updatePairingState(device.address, device.paired);
             break;
-          // Ignored these properties updates
           case BluezProperty.bonded:
           case BluezProperty.legacyPairing:
           case BluezProperty.servicesResolved:
@@ -621,30 +782,166 @@ class UniversalBleLinux extends UniversalBlePlatform {
             UniversalLogger.logInfo(
               "UnhandledDevicePropertyChanged ${device.name} ${device.address}: $property",
             );
-            break;
         }
       }
     });
   }
 
-  void _onDeviceRemoved(BlueZDevice device) {
-    _devices.remove(device.address);
-    // Clean Update listeners
-    _deviceUpdateStreamSubscriptions.removeWhere((key, value) {
-      if (key == device.address) {
-        value.cancel();
-        return true;
+  void _listenForAdvertisements(BlueZDevice device, int generation) {
+    final key = device.address.toLowerCase();
+    _deviceAdvertisementSubscriptions[key] ??= device.propertiesChanged
+        .where((e) {
+          return e.contains(BluezProperty.rssi) ||
+              e.contains(BluezProperty.manufacturerData) ||
+              e.contains(BluezProperty.uuids) ||
+              e.contains(BluezProperty.serviceData);
+        })
+        .listen((_) {
+          if (generation == _runtimeGeneration &&
+              identical(_devices[key], device) &&
+              _isScanActive &&
+              _bleFilter.shouldAcceptDevice(device.toBleDevice())) {
+            updateScanResult(device.toBleDevice());
+          }
+        });
+  }
+
+  Future<void> _evictDevice(BlueZDevice device) async {
+    final key = device.address.toLowerCase();
+    if (!identical(_devices[key], device)) return;
+    _devices.remove(key);
+    if (device.connected) updateConnection(device.address, false);
+    final updateSubscription = _deviceUpdateStreamSubscriptions.remove(key);
+    final advertisementSubscription = _deviceAdvertisementSubscriptions.remove(
+      key,
+    );
+    final characteristicKeys = _characteristicPropertiesSubscriptions.keys
+        .where((entry) => entry.startsWith('${device.address.toLowerCase()}_'))
+        .toList(growable: false);
+    final characteristicSubscriptions = characteristicKeys
+        .map(_characteristicPropertiesSubscriptions.remove)
+        .whereType<StreamSubscription>();
+    await Future.wait([
+      if (updateSubscription != null) updateSubscription.cancel(),
+      if (advertisementSubscription != null) advertisementSubscription.cancel(),
+      ...characteristicSubscriptions.map(
+        (subscription) => subscription.cancel(),
+      ),
+    ]);
+  }
+
+  Future<void> _teardownRuntime() async {
+    _runtimeGeneration++;
+    isInitialized = false;
+    _initializationFuture = null;
+    updateAvailability(AvailabilityState.unknown);
+    final connected = _devices.values
+        .where((device) => device.connected)
+        .toList(growable: false);
+    for (final device in connected) {
+      updateConnection(device.address, false);
+    }
+    _isScanActive = false;
+    final client = _client;
+    final cancellations = <Future<void>>[
+      if (_adapterAdded != null) _adapterAdded!.cancel(),
+      if (_adapterRemoved != null) _adapterRemoved!.cancel(),
+      if (_adapterProperties != null) _adapterProperties!.cancel(),
+      if (_deviceAdded != null) _deviceAdded!.cancel(),
+      if (_deviceRemoved != null) _deviceRemoved!.cancel(),
+      ..._deviceUpdateStreamSubscriptions.values.map((s) => s.cancel()),
+      ..._deviceAdvertisementSubscriptions.values.map((s) => s.cancel()),
+      ..._characteristicPropertiesSubscriptions.values.map((s) => s.cancel()),
+    ];
+    _client = null;
+    _adapterAdded = null;
+    _adapterRemoved = null;
+    _adapterProperties = null;
+    _deviceAdded = null;
+    _deviceRemoved = null;
+    _deviceUpdateStreamSubscriptions.clear();
+    _deviceAdvertisementSubscriptions.clear();
+    _characteristicPropertiesSubscriptions.clear();
+    _devices.clear();
+    _adapters.clear();
+    _activeAdapter = null;
+    await Future.wait(cancellations);
+    await client?.close();
+  }
+
+  Future<void> _waitForServices(BlueZDevice device) async {
+    if (!device.connected) {
+      throw UniversalBleException(
+        code: UniversalBleErrorCode.deviceDisconnected,
+        message: 'Device disconnected while resolving services',
+      );
+    }
+    final generation = _runtimeGeneration;
+    final completer = Completer<void>();
+    late final StreamSubscription<List<String>> subscription;
+    subscription = device.propertiesChanged.listen((properties) {
+      if (generation != _runtimeGeneration ||
+          !identical(_devices[device.address.toLowerCase()], device) ||
+          !device.connected) {
+        if (!completer.isCompleted) {
+          completer.completeError(
+            UniversalBleException(
+              code: UniversalBleErrorCode.deviceDisconnected,
+              message: 'Device disconnected while resolving services',
+            ),
+          );
+        }
+      } else if (properties.contains(BluezProperty.servicesResolved) &&
+          device.servicesResolved &&
+          !completer.isCompleted) {
+        completer.complete();
       }
-      return false;
     });
-    // Clean Advertisement listeners
-    _deviceAdvertisementSubscriptions.removeWhere((key, value) {
-      if (key == device.address) {
-        value.cancel();
-        return true;
+    if (!device.connected ||
+        generation != _runtimeGeneration ||
+        !identical(_devices[device.address.toLowerCase()], device)) {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          UniversalBleException(
+            code: UniversalBleErrorCode.deviceDisconnected,
+            message: 'Device disconnected while resolving services',
+          ),
+        );
       }
-      return false;
-    });
+    } else if (device.servicesResolved) {
+      if (!completer.isCompleted) completer.complete();
+    }
+    try {
+      await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          if (generation != _runtimeGeneration ||
+              !identical(_devices[device.address.toLowerCase()], device) ||
+              !device.connected) {
+            throw UniversalBleException(
+              code: UniversalBleErrorCode.deviceDisconnected,
+              message: 'Device disconnected while resolving services',
+            );
+          }
+          throw UniversalBleException(
+            code: UniversalBleErrorCode.servicesNotResolved,
+            message: 'Timed out waiting for BlueZ services',
+          );
+        },
+      );
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  Future<void> dispose() async {
+    await _ownerSubscription?.cancel();
+    _ownerSubscription = null;
+    _pendingOwnerChange = null;
+    await _ownerChangeDrain;
+    await _teardownRuntime();
+    await _ownerBus?.close();
+    _ownerBus = null;
   }
 }
 

@@ -670,4 +670,5 @@ enum UniversalBleErrorCode {
 
   // Web-specific errors
   webBluetoothGloballyDisabled,
+  servicesNotResolved,
 }

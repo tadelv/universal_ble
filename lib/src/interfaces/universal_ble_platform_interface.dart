@@ -126,7 +126,7 @@ abstract class UniversalBlePlatform {
   bool receivesAdvertisements(String deviceId) => true;
 
   /// Clears the platform's GATT service cache for [deviceId].
-  /// Only supported on Android; see [BleCapabilities.supportsClearGattCacheApi].
+  /// Supported on Android and Linux; see [BleCapabilities.supportsClearGattCacheApi].
   Future<void> clearGattCache(String deviceId) async {
     throw UniversalBleException(
       code: UniversalBleErrorCode.notSupported,

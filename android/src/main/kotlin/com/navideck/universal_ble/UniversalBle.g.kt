@@ -472,7 +472,8 @@ enum class UniversalBleErrorCode(val raw: Int) {
   ALREADY_UNPAIRED(58),
   SCAN_FAILED(59),
   STOPPING_SCAN_IN_PROGRESS(60),
-  WEB_BLUETOOTH_GLOBALLY_DISABLED(61);
+  WEB_BLUETOOTH_GLOBALLY_DISABLED(61),
+  SERVICES_NOT_RESOLVED(62);
 
   companion object {
     fun ofRaw(raw: Int): UniversalBleErrorCode? {

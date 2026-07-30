@@ -661,11 +661,14 @@ class UniversalBle {
     );
   }
 
-  /// Clear Android's GATT service cache for a device.
+  /// Reset platform GATT state for a device.
   ///
   /// Remedy for stale service caches on misbehaving stacks or after
   /// peripheral firmware updates (wrong/missing services on discovery).
-  /// Only supported on Android — check
+  /// Android refreshes its native GATT cache. Linux removes unpaired devices
+  /// from BlueZ; paired devices keep their bond and receive a soft reset that
+  /// does not purge BlueZ's internal service cache.
+  /// Check
   /// [BleCapabilities.supportsClearGattCacheApi]; other platforms throw
   /// [UniversalBleException] with [UniversalBleErrorCode.notSupported].
   static Future<void> clearGattCache(
