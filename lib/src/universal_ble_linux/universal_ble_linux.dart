@@ -573,8 +573,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
 
   Future<void> _drainOwnerChanges() async {
     while (_pendingOwnerChange != null) {
-      final change = _pendingOwnerChange!;
-      _pendingOwnerChange = null;
+      final change = await _takeLatestOwnerChange();
       final nextOwner = change.newOwner?.isEmpty == true
           ? null
           : change.newOwner;
@@ -582,12 +581,23 @@ class UniversalBleLinux extends UniversalBlePlatform {
       _owner = nextOwner;
       await _teardownRuntime();
       while (_pendingOwnerChange != null) {
-        final latest = _pendingOwnerChange!;
-        _pendingOwnerChange = null;
+        final latest = await _takeLatestOwnerChange();
         _owner = latest.newOwner?.isEmpty == true ? null : latest.newOwner;
       }
       if (_owner != null) await _ensureRuntimeInitialized();
     }
+  }
+
+  Future<BluezOwnerChange> _takeLatestOwnerChange() async {
+    var latest = _pendingOwnerChange!;
+    _pendingOwnerChange = null;
+    await Future<void>.delayed(Duration.zero);
+    while (_pendingOwnerChange != null) {
+      latest = _pendingOwnerChange!;
+      _pendingOwnerChange = null;
+      await Future<void>.delayed(Duration.zero);
+    }
+    return latest;
   }
 
   Future<void> _initializeRuntime() async {
@@ -709,7 +719,17 @@ class UniversalBleLinux extends UniversalBlePlatform {
     }
     final key = device.address.toLowerCase();
     final previous = _devices[key];
-    if (previous != null && !identical(previous, device)) {
+    if (previous != null && previous.path == device.path) {
+      final bleDevice = previous.toBleDevice();
+      if (_isScanActive &&
+          previous.rssi != 0 &&
+          _bleFilter.shouldAcceptDevice(bleDevice)) {
+        updateScanResult(bleDevice);
+      }
+      if (_isScanActive) _listenForAdvertisements(previous, generation);
+      return;
+    }
+    if (previous != null) {
       await _evictDevice(previous);
     }
     if (generation != _runtimeGeneration ||

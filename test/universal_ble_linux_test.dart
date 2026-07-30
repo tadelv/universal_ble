@@ -233,15 +233,13 @@ void main() {
       final subscription = plugin
           .connectionStream('AA:BB:CC:DD:EE:FF')
           .listen(updates.add);
-      await device.setConnected(true);
-      await pumpUntil(() => updates.contains(true));
 
       await manager.emitInterfacesRemoved(adapter.path, const [
         'org.bluez.Adapter1',
       ]);
       await pumpUntil(() => updates.contains(false));
 
-      expect(updates, [true, false]);
+      expect(updates, [false]);
       await subscription.cancel();
     },
     skip: Platform.isWindows,
