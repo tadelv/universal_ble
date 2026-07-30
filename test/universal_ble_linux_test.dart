@@ -85,6 +85,7 @@ void main() {
   late DBusServer server;
   late DBusAddress address;
   late DBusClient bluezService;
+  late DBusObject manager;
   late _AdapterObject adapter;
   late _DeviceObject device;
   late StreamController<BluezOwnerChange> owners;
@@ -105,9 +106,8 @@ void main() {
     );
     bluezService = DBusClient(address);
     await bluezService.requestName('org.bluez');
-    await bluezService.registerObject(
-      DBusObject(DBusObjectPath('/'), isObjectManager: true),
-    );
+    manager = DBusObject(DBusObjectPath('/'), isObjectManager: true);
+    await bluezService.registerObject(manager);
     adapter = _AdapterObject();
     device = _DeviceObject(paired: false, connected: true);
     await bluezService.registerObject(adapter);
@@ -221,6 +221,72 @@ void main() {
       await plugin.getBluetoothAvailabilityState();
       await plugin.clearGattCache('AA:BB:CC:DD:EE:FF');
       expect(adapter.removeDeviceCalls, 1);
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
+    'adapter removal emits disconnected before device eviction',
+    () async {
+      await plugin.getBluetoothAvailabilityState();
+      final updates = <bool>[];
+      final subscription = plugin
+          .connectionStream('AA:BB:CC:DD:EE:FF')
+          .listen(updates.add);
+      await device.setConnected(true);
+      await pumpUntil(() => updates.contains(true));
+
+      await manager.emitInterfacesRemoved(adapter.path, const [
+        'org.bluez.Adapter1',
+      ]);
+      await pumpUntil(() => updates.contains(false));
+
+      expect(updates, [true, false]);
+      await subscription.cancel();
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
+    'repeated scans reuse the device property subscription',
+    () async {
+      await plugin.getBluetoothAvailabilityState();
+      final updates = <bool>[];
+      final subscription = plugin
+          .connectionStream('AA:BB:CC:DD:EE:FF')
+          .listen(updates.add);
+
+      for (var i = 0; i < 3; i++) {
+        await plugin.startScan();
+        await plugin.stopScan();
+      }
+      await device.setConnected(false);
+      await pumpUntil(() => updates.isNotEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(updates, [false]);
+      await subscription.cancel();
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
+    'runtime loss during service discovery reports disconnected',
+    () async {
+      await plugin.getBluetoothAvailabilityState();
+      final discovery = plugin.discoverServices('AA:BB:CC:DD:EE:FF', false);
+      owners.add(const BluezOwnerChange(':1.1', null));
+
+      await expectLater(
+        discovery,
+        throwsA(
+          isA<UniversalBleException>().having(
+            (error) => error.code,
+            'code',
+            UniversalBleErrorCode.deviceDisconnected,
+          ),
+        ),
+      );
     },
     skip: Platform.isWindows,
   );

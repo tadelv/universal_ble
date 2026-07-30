@@ -48,7 +48,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
   DBusClient? _ownerBus;
   BlueZClient? _client;
   String? _owner;
-  int _ownerGeneration = 0;
+  BluezOwnerChange? _pendingOwnerChange;
+  Future<void>? _ownerChangeDrain;
   late final UniversalBleFilterUtil _bleFilter = UniversalBleFilterUtil();
   BlueZAdapter? _activeAdapter;
   String? _selectedAdapterAddress;
@@ -523,6 +524,12 @@ class UniversalBleLinux extends UniversalBlePlatform {
 
   Future<void> _ensureInitialized() async {
     await _ensureOwnerMonitoring();
+    final ownerChangeDrain = _ownerChangeDrain;
+    if (ownerChangeDrain != null) await ownerChangeDrain;
+    await _ensureRuntimeInitialized();
+  }
+
+  Future<void> _ensureRuntimeInitialized() async {
     if (_owner == null || isInitialized) return;
     final existing = _initializationFuture;
     if (existing != null) return existing;
@@ -541,23 +548,46 @@ class UniversalBleLinux extends UniversalBlePlatform {
     var eventGeneration = 0;
     _ownerSubscription = _ownerChanges.listen((change) {
       eventGeneration++;
-      unawaited(_handleOwnerChange(change));
+      unawaited(_queueOwnerChange(change));
     });
     final lookupGeneration = eventGeneration;
     final owner = await _currentOwner();
     if (lookupGeneration == eventGeneration) {
-      await _handleOwnerChange(BluezOwnerChange(null, owner));
+      await _queueOwnerChange(BluezOwnerChange(null, owner));
+    } else {
+      await _ownerChangeDrain;
     }
   }
 
-  Future<void> _handleOwnerChange(BluezOwnerChange change) async {
-    final nextOwner = change.newOwner?.isEmpty == true ? null : change.newOwner;
-    if (nextOwner == _owner) return;
-    final ownerGeneration = ++_ownerGeneration;
-    _owner = nextOwner;
-    await _teardownRuntime();
-    if (ownerGeneration != _ownerGeneration) return;
-    if (nextOwner != null) await _ensureInitialized();
+  Future<void> _queueOwnerChange(BluezOwnerChange change) {
+    _pendingOwnerChange = change;
+    final existing = _ownerChangeDrain;
+    if (existing != null) return existing;
+    late final Future<void> drain;
+    drain = Future<void>(_drainOwnerChanges).whenComplete(() {
+      if (identical(_ownerChangeDrain, drain)) _ownerChangeDrain = null;
+    });
+    _ownerChangeDrain = drain;
+    return drain;
+  }
+
+  Future<void> _drainOwnerChanges() async {
+    while (_pendingOwnerChange != null) {
+      final change = _pendingOwnerChange!;
+      _pendingOwnerChange = null;
+      final nextOwner = change.newOwner?.isEmpty == true
+          ? null
+          : change.newOwner;
+      if (nextOwner == _owner) continue;
+      _owner = nextOwner;
+      await _teardownRuntime();
+      while (_pendingOwnerChange != null) {
+        final latest = _pendingOwnerChange!;
+        _pendingOwnerChange = null;
+        _owner = latest.newOwner?.isEmpty == true ? null : latest.newOwner;
+      }
+      if (_owner != null) await _ensureRuntimeInitialized();
+    }
   }
 
   Future<void> _initializeRuntime() async {
@@ -696,7 +726,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
 
     if (_isScanActive) _listenForAdvertisements(device, generation);
 
-    _deviceUpdateStreamSubscriptions[key] = device.propertiesChanged.listen((
+    _deviceUpdateStreamSubscriptions[key] ??= device.propertiesChanged.listen((
       properties,
     ) {
       if (generation != _runtimeGeneration ||
@@ -753,6 +783,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<void> _evictDevice(BlueZDevice device) async {
     final key = device.address.toLowerCase();
     if (!identical(_devices[key], device)) return;
+    if (device.connected) updateConnection(device.address, false);
     final updateSubscription = _deviceUpdateStreamSubscriptions.remove(key);
     final advertisementSubscription = _deviceAdvertisementSubscriptions.remove(
       key,
@@ -859,10 +890,20 @@ class UniversalBleLinux extends UniversalBlePlatform {
     try {
       await completer.future.timeout(
         const Duration(seconds: 10),
-        onTimeout: () => throw UniversalBleException(
-          code: UniversalBleErrorCode.servicesNotResolved,
-          message: 'Timed out waiting for BlueZ services',
-        ),
+        onTimeout: () {
+          if (generation != _runtimeGeneration ||
+              !identical(_devices[device.address.toLowerCase()], device) ||
+              !device.connected) {
+            throw UniversalBleException(
+              code: UniversalBleErrorCode.deviceDisconnected,
+              message: 'Device disconnected while resolving services',
+            );
+          }
+          throw UniversalBleException(
+            code: UniversalBleErrorCode.servicesNotResolved,
+            message: 'Timed out waiting for BlueZ services',
+          );
+        },
       );
     } finally {
       await subscription.cancel();
@@ -872,6 +913,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<void> dispose() async {
     await _ownerSubscription?.cancel();
     _ownerSubscription = null;
+    _pendingOwnerChange = null;
+    await _ownerChangeDrain;
     await _teardownRuntime();
     await _ownerBus?.close();
     _ownerBus = null;
