@@ -19,6 +19,8 @@ class BluezOwnerChange {
 }
 
 class UniversalBleLinux extends UniversalBlePlatform {
+  static const _ownerChangeSettle = Duration(milliseconds: 20);
+
   UniversalBleLinux({
     BlueZClient Function()? clientFactory,
     Stream<BluezOwnerChange>? ownerChanges,
@@ -591,11 +593,11 @@ class UniversalBleLinux extends UniversalBlePlatform {
   Future<BluezOwnerChange> _takeLatestOwnerChange() async {
     var latest = _pendingOwnerChange!;
     _pendingOwnerChange = null;
-    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(_ownerChangeSettle);
     while (_pendingOwnerChange != null) {
       latest = _pendingOwnerChange!;
       _pendingOwnerChange = null;
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(_ownerChangeSettle);
     }
     return latest;
   }
@@ -618,7 +620,13 @@ class UniversalBleLinux extends UniversalBlePlatform {
       unawaited(_onDeviceAdd(device, generation));
     });
     _deviceRemoved = client.deviceRemoved.listen((device) {
-      unawaited(_evictDevice(device));
+      if (generation != _runtimeGeneration) return;
+      for (final cached in _devices.values) {
+        if (cached.path == device.path) {
+          unawaited(_evictDevice(cached));
+          return;
+        }
+      }
     });
     try {
       await client.connect();

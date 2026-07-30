@@ -234,9 +234,7 @@ void main() {
           .connectionStream('AA:BB:CC:DD:EE:FF')
           .listen(updates.add);
 
-      await manager.emitInterfacesRemoved(adapter.path, const [
-        'org.bluez.Adapter1',
-      ]);
+      await bluezService.unregisterObject(adapter);
       await pumpUntil(() => updates.contains(false));
 
       expect(updates, [false]);
