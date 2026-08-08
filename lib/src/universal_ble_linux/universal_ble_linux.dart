@@ -309,10 +309,9 @@ class UniversalBleLinux extends UniversalBlePlatform {
     if (bleInputProperty != BleInputProperty.disabled) {
       if (char.notifying) {
         UniversalLogger.logInfo('$characteristic already notifying');
-        return;
+      } else {
+        await char.startNotify();
       }
-
-      await char.startNotify();
 
       if (_characteristicPropertiesSubscriptions[characteristicKey] != null) {
         _characteristicPropertiesSubscriptions[characteristicKey]?.cancel();
