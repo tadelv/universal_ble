@@ -108,6 +108,77 @@ class _DeviceObject extends DBusObject {
   }
 }
 
+class _ServiceObject extends DBusObject {
+  _ServiceObject()
+    : super(
+        DBusObjectPath('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0001'),
+      );
+
+  static const uuid = '0000180d-0000-1000-8000-00805f9b34fb';
+
+  @override
+  Map<String, Map<String, DBusValue>> get interfacesAndProperties => {
+    'org.bluez.GattService1': {
+      'UUID': DBusString(uuid),
+      'Primary': DBusBoolean(true),
+      'Device': DBusObjectPath('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF'),
+    },
+  };
+}
+
+class _CharacteristicObject extends DBusObject {
+  _CharacteristicObject({required this.notifying})
+    : super(
+        DBusObjectPath(
+          '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0001/char0001',
+        ),
+      );
+
+  static const uuid = '00002a37-0000-1000-8000-00805f9b34fb';
+  static const _interface = 'org.bluez.GattCharacteristic1';
+
+  bool notifying;
+  List<int> value = const [];
+  int startNotifyCalls = 0;
+
+  @override
+  Map<String, Map<String, DBusValue>> get interfacesAndProperties => {
+    _interface: {
+      'UUID': DBusString(uuid),
+      'Service': DBusObjectPath(
+        '/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF/service0001',
+      ),
+      'Value': DBusArray.byte(value),
+      'Notifying': DBusBoolean(notifying),
+      'Flags': DBusArray.string(const ['notify']),
+    },
+  };
+
+  Future<void> setValue(List<int> nextValue) async {
+    value = List<int>.unmodifiable(nextValue);
+    await emitPropertiesChanged(
+      _interface,
+      changedProperties: {'Value': DBusArray.byte(value)},
+    );
+  }
+
+  @override
+  Future<DBusMethodResponse> handleMethodCall(DBusMethodCall call) async {
+    if (call.interface != _interface) {
+      return DBusMethodErrorResponse.unknownInterface();
+    }
+    if (call.name == 'StartNotify') {
+      startNotifyCalls++;
+      notifying = true;
+      await emitPropertiesChanged(
+        _interface,
+        changedProperties: {'Notifying': DBusBoolean(true)},
+      );
+    }
+    return DBusMethodSuccessResponse();
+  }
+}
+
 void main() {
   late DBusServer server;
   late DBusAddress address;
@@ -115,6 +186,8 @@ void main() {
   late DBusObject manager;
   late _AdapterObject adapter;
   late _DeviceObject device;
+  late _ServiceObject service;
+  late _CharacteristicObject characteristic;
   late StreamController<BluezOwnerChange> owners;
   late UniversalBleLinux plugin;
   var clientsCreated = 0;
@@ -138,8 +211,12 @@ void main() {
     await bluezService.registerObject(manager);
     adapter = _AdapterObject();
     device = _DeviceObject(paired: false, connected: true);
+    service = _ServiceObject();
+    characteristic = _CharacteristicObject(notifying: true);
     await bluezService.registerObject(adapter);
     await bluezService.registerObject(device);
+    await bluezService.registerObject(service);
+    await bluezService.registerObject(characteristic);
     owners = StreamController<BluezOwnerChange>.broadcast();
     plugin = UniversalBleLinux(
       clientFactory: () {
@@ -260,6 +337,31 @@ void main() {
     }
     expect(device.connected, isFalse);
   }, skip: Platform.isWindows);
+
+  test(
+    'already-notifying characteristics still deliver values',
+    () async {
+      await plugin.getBluetoothAvailabilityState();
+      final value = plugin
+          .characteristicValueStream(
+            'AA:BB:CC:DD:EE:FF',
+            _CharacteristicObject.uuid,
+          )
+          .first;
+
+      await plugin.setNotifiable(
+        'AA:BB:CC:DD:EE:FF',
+        _ServiceObject.uuid,
+        _CharacteristicObject.uuid,
+        BleInputProperty.notification,
+      );
+      await characteristic.setValue([1, 2, 3]);
+
+      expect(characteristic.startNotifyCalls, 0);
+      expect(await value.timeout(const Duration(seconds: 1)), [1, 2, 3]);
+    },
+    skip: Platform.isWindows,
+  );
 
   test(
     'cache reset removes unpaired devices and preserves paired devices',
