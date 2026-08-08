@@ -55,6 +55,35 @@ jobs:
         working-directory: example
         run: flutter build linux
 
+  native-builds:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            builds: flutter build windows
+          - name: Apple
+            os: macos-latest
+            builds: |
+              flutter build macos
+              flutter build ios --no-codesign
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Build ${{ matrix.name }}
+        working-directory: example
+        run: ${{ matrix.builds }}
+
   pana:
     runs-on: ubuntu-latest
 
