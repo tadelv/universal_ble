@@ -1,6 +1,6 @@
 ## Unreleased
 
-* Linux: cancel in-flight BlueZ connection attempts when disconnecting after a timeout.
+* Linux: cancel the original in-flight BlueZ connection attempt when disconnecting after a timeout or racing connect.
 * Android: report scans as active only after `BluetoothLeScanner` starts.
 * Linux: attach value listeners when BlueZ already reports a characteristic as notifying.
 * Build the Windows, macOS, and iOS examples in pull request CI.

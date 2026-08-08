@@ -88,6 +88,9 @@ class _DeviceObject extends DBusObject {
     }
     if (call.name == 'Connect') {
       connectCalls++;
+      if (_connectPending) {
+        return DBusMethodErrorResponse('org.bluez.Error.InProgress');
+      }
       _connectPending = true;
       try {
         if (connectGate != null) await connectGate!.future;
@@ -333,6 +336,41 @@ void main() {
       connectGate.complete();
       try {
         await connection;
+      } catch (_) {}
+    }
+    expect(device.connected, isFalse);
+  }, skip: Platform.isWindows);
+
+  test('a racing connect cannot hide the in-flight connect', () async {
+    await plugin.dispose();
+    await bluezService.unregisterObject(device);
+    final connectGate = Completer<void>();
+    device = _DeviceObject(
+      paired: false,
+      connected: false,
+      connectGate: connectGate,
+    );
+    await bluezService.registerObject(device);
+    plugin = UniversalBleLinux(
+      clientFactory: () => BlueZClient(bus: DBusClient(address)),
+      ownerChanges: owners.stream,
+      currentOwner: () async => ':1.2',
+    );
+    await plugin.getBluetoothAvailabilityState();
+
+    final firstConnection = plugin.connect('AA:BB:CC:DD:EE:FF');
+    await pumpUntil(() => device.connectCalls == 1);
+    await expectLater(
+      plugin.connect('AA:BB:CC:DD:EE:FF'),
+      throwsA(isA<BlueZInProgressException>()),
+    );
+    try {
+      await plugin.disconnect('AA:BB:CC:DD:EE:FF');
+      expect(device.disconnectCalls, 1);
+    } finally {
+      connectGate.complete();
+      try {
+        await firstConnection;
       } catch (_) {}
     }
     expect(device.connected, isFalse);

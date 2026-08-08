@@ -185,7 +185,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
     }
     final key = deviceId.toLowerCase();
     final connecting = (device: device, attempt: Object());
-    _connectingDevices[key] = connecting;
+    _connectingDevices.putIfAbsent(key, () => connecting);
     try {
       await device.connect();
     } finally {
