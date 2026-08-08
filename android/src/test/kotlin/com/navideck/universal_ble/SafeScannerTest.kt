@@ -124,7 +124,7 @@ internal class SafeScannerTest {
     }
 
     @Test
-    fun throttledRetryRemainsReportedAsScanning() {
+    fun throttledRetryIsNotReportedAsScanning() {
         val scanner = mock(BluetoothLeScanner::class.java)
         val handler = mock(Handler::class.java)
         val safeScanner = scanner(scanner, handler)
@@ -143,7 +143,7 @@ internal class SafeScannerTest {
             }
         }
 
-        assertTrue(safeScanner.isScanning())
+        assertFalse(safeScanner.isScanning())
         verify(scanner, times(5)).startScan(anyList(), eq(settings), any(ScanCallback::class.java))
         verify(handler).postDelayed(any(Runnable::class.java), eq(31_995L))
     }
