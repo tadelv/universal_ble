@@ -111,6 +111,6 @@ class SafeScanner(
     }
 
     fun isScanning(): Boolean {
-        return isScanning || awaitingScan
+        return isScanning
     }
 }

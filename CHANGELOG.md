@@ -1,6 +1,7 @@
 ## Unreleased
 
 * Linux: cancel in-flight BlueZ connection attempts when disconnecting after a timeout.
+* Android: report scans as active only after `BluetoothLeScanner` starts.
 
 ## 2.2.5
 
