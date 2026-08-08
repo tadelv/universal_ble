@@ -1,3 +1,7 @@
+## Unreleased
+
+* Linux: cancel in-flight BlueZ connection attempts when disconnecting after a timeout.
+
 ## 2.2.5
 
 * Rebuild the Linux BlueZ runtime after D-Bus owner replacement.

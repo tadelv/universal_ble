@@ -37,12 +37,20 @@ class _AdapterObject extends DBusObject {
 }
 
 class _DeviceObject extends DBusObject {
-  _DeviceObject({required this.paired, required this.connected})
-    : super(DBusObjectPath('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF'));
+  _DeviceObject({
+    required this.paired,
+    required this.connected,
+    this.connectGate,
+  }) : super(DBusObjectPath('/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF'));
 
   bool paired;
   bool connected;
   bool servicesResolved = false;
+  final Completer<void>? connectGate;
+  int connectCalls = 0;
+  int disconnectCalls = 0;
+  bool _connectPending = false;
+  bool _connectCancelled = false;
 
   @override
   Map<String, Map<String, DBusValue>> get interfacesAndProperties => {
@@ -78,8 +86,24 @@ class _DeviceObject extends DBusObject {
     if (call.interface != 'org.bluez.Device1') {
       return DBusMethodErrorResponse.unknownInterface();
     }
-    if (call.name == 'Connect') await setConnected(true);
-    if (call.name == 'Disconnect') await setConnected(false);
+    if (call.name == 'Connect') {
+      connectCalls++;
+      _connectPending = true;
+      try {
+        if (connectGate != null) await connectGate!.future;
+        if (_connectCancelled) {
+          return DBusMethodErrorResponse('org.bluez.Error.Failed');
+        }
+        await setConnected(true);
+      } finally {
+        _connectPending = false;
+      }
+    }
+    if (call.name == 'Disconnect') {
+      disconnectCalls++;
+      if (_connectPending) _connectCancelled = true;
+      await setConnected(false);
+    }
     return DBusMethodSuccessResponse();
   }
 }
@@ -205,6 +229,37 @@ void main() {
     },
     skip: Platform.isWindows,
   );
+
+  test('disconnect cancels an in-flight connect', () async {
+    await plugin.dispose();
+    await bluezService.unregisterObject(device);
+    final connectGate = Completer<void>();
+    device = _DeviceObject(
+      paired: false,
+      connected: false,
+      connectGate: connectGate,
+    );
+    await bluezService.registerObject(device);
+    plugin = UniversalBleLinux(
+      clientFactory: () => BlueZClient(bus: DBusClient(address)),
+      ownerChanges: owners.stream,
+      currentOwner: () async => ':1.2',
+    );
+    await plugin.getBluetoothAvailabilityState();
+
+    final connection = plugin.connect('AA:BB:CC:DD:EE:FF');
+    await pumpUntil(() => device.connectCalls == 1);
+    try {
+      await plugin.disconnect('AA:BB:CC:DD:EE:FF');
+      expect(device.disconnectCalls, 1);
+    } finally {
+      connectGate.complete();
+      try {
+        await connection;
+      } catch (_) {}
+    }
+    expect(device.connected, isFalse);
+  }, skip: Platform.isWindows);
 
   test(
     'cache reset removes unpaired devices and preserves paired devices',
