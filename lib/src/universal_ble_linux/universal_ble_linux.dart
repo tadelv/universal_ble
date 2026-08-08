@@ -66,6 +66,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
   int _runtimeGeneration = 0;
   bool _isScanActive = false;
   final Map<String, BlueZDevice> _devices = {};
+  final Map<String, ({BlueZDevice device, Object attempt})> _connectingDevices =
+      {};
   final Map<String, StreamSubscription> _deviceUpdateStreamSubscriptions = {};
   final Map<String, StreamSubscription> _deviceAdvertisementSubscriptions = {};
 
@@ -181,14 +183,24 @@ class UniversalBleLinux extends UniversalBlePlatform {
       updateConnection(deviceId, true);
       return;
     }
-    await device.connect();
+    final key = deviceId.toLowerCase();
+    final connecting = (device: device, attempt: Object());
+    _connectingDevices[key] = connecting;
+    try {
+      await device.connect();
+    } finally {
+      if (identical(_connectingDevices[key]?.attempt, connecting.attempt)) {
+        _connectingDevices.remove(key);
+      }
+    }
   }
 
   @override
   Future<void> disconnect(String deviceId) async {
-    final device = _getDeviceById(deviceId);
-    if (device?.connected == true) {
-      await device?.disconnect();
+    final connecting = _connectingDevices[deviceId.toLowerCase()];
+    final device = connecting?.device ?? _getDeviceById(deviceId);
+    if (device != null && (device.connected || connecting != null)) {
+      await device.disconnect();
     }
     updateConnection(deviceId, false);
   }
