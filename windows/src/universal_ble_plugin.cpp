@@ -85,6 +85,7 @@ UniversalBlePlugin::UniversalBlePlugin(
 }
 
 UniversalBlePlugin::~UniversalBlePlugin() {
+  ResetState();
   ClearServices();
   peripheral_callback_channel_.reset();
 }
