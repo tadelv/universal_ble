@@ -1,3 +1,7 @@
+## Unreleased
+
+* Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
+
 ## 2.2.6
 
 * Linux: cancel the original in-flight BlueZ connection attempt when disconnecting after a timeout or racing connect.
