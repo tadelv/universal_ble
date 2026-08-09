@@ -13,6 +13,8 @@ import android.content.Context
 import android.os.Handler
 import android.os.SystemClock
 import android.util.Log
+import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.plugin.common.BinaryMessenger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -23,6 +25,7 @@ import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.eq
+import org.mockito.ArgumentMatchers.isNull
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
@@ -148,6 +151,46 @@ internal class UniversalBlePluginTest {
 
         verify(handler).removeCallbacks(pendingConnect)
         verify(handler, times(1)).post(any(Runnable::class.java))
+    }
+
+    @Test
+    fun engineDetachClosesConnectionsAndUnregistersCentralChannel() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val manager = mock(BluetoothManager::class.java)
+        val adapter = mock(BluetoothAdapter::class.java)
+        val scanner = mock(BluetoothLeScanner::class.java)
+        val context = mock(Context::class.java)
+        val peripheral = mock(UniversalBlePeripheralPlugin::class.java)
+        val binding = mock(FlutterPlugin.FlutterPluginBinding::class.java)
+        val messenger = mock(BinaryMessenger::class.java)
+        val gatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+
+        `when`(manager.adapter).thenReturn(adapter)
+        `when`(adapter.bluetoothLeScanner).thenReturn(scanner)
+        `when`(binding.binaryMessenger).thenReturn(messenger)
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("safeScanner", SafeScanner(manager, handler))
+        plugin.setField("context", context)
+        plugin.setField("peripheralPlugin", peripheral)
+        gatt.saveCacheIfNeeded()
+
+        try {
+            plugin.onDetachedFromEngine(binding)
+
+            verify(gatt).close()
+            assertNull(deviceId.findGatt())
+            verify(messenger).setMessageHandler(
+                eq("dev.flutter.pigeon.universal_ble.UniversalBlePlatformChannel.disconnect"),
+                isNull(),
+            )
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
     }
 
     @Test

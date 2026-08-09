@@ -106,12 +106,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         safeScanner.stopScan()
-        disposeTemporaryDiscoveryGatts()
-        pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
-        pendingConnects.clear()
+        cleanUpCentralState(null)
         disconnectTimestamps.clear()
         context.unregisterReceiver(broadcastReceiver)
         peripheralPlugin.dispose()
+        UniversalBlePlatformChannel.setUp(binding.binaryMessenger, null)
         UniversalBlePeripheralChannel.setUp(binding.binaryMessenger, null)
         UniversalBleAndroidChannel.setUp(binding.binaryMessenger, null)
         callbackChannel = null
@@ -1474,6 +1473,10 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     // goes down, so fail them here and close the GATT clients — leaked
     // clients (capped at 32 system-wide) later surface as GATT 133.
     private fun cleanUpOnAdapterOff() {
+        cleanUpCentralState("ADAPTER_OFF")
+    }
+
+    private fun cleanUpCentralState(notificationError: String?) {
         disposeTemporaryDiscoveryGatts()
         val pendingDeviceIds = pendingConnects.keys.toList()
         val knownGatts = allKnownGatts()
@@ -1490,9 +1493,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 UniversalBleLogger.logError("Failed to close gatt for $deviceId: $e")
             }
         }
-        (pendingDeviceIds + knownGatts.map { it.device.address })
-            .distinctBy { it.connectionKey() }
-            .forEach { notifyDisconnected(it, "ADAPTER_OFF") }
+        if (notificationError != null) {
+            (pendingDeviceIds + knownGatts.map { it.device.address })
+                .distinctBy { it.connectionKey() }
+                .forEach { notifyDisconnected(it, notificationError) }
+        }
         autoConnectDevices.clear()
     }
 
