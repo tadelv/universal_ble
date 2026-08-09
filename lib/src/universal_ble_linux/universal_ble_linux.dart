@@ -873,6 +873,7 @@ class UniversalBleLinux extends UniversalBlePlatform {
     _deviceUpdateStreamSubscriptions.clear();
     _deviceAdvertisementSubscriptions.clear();
     _characteristicPropertiesSubscriptions.clear();
+    _connectingDevices.clear();
     _devices.clear();
     _adapters.clear();
     _activeAdapter = null;
