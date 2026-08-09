@@ -1,5 +1,6 @@
 ## Unreleased
 
+* Windows: cancel pending connection attempts before they can publish a late connection.
 * Windows: release scan watchers, connection callbacks, and GATT resources when the plugin is destroyed.
 
 ## 2.2.6
