@@ -207,6 +207,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func connect(deviceId: String, autoConnect: Bool?, platformConfig: ConnectionPlatformConfig?) throws {
+    let deviceId = deviceId.normalizedDeviceId
     let peripheral = try deviceId.getPeripheral(manager: manager)
     peripheral.delegate = self
     if peripheral.state == .connected {
@@ -260,6 +261,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func disconnect(deviceId: String) throws {
+    let deviceId = deviceId.normalizedDeviceId
     autoConnectDevices.remove(deviceId)
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       callbackChannel.onConnectionChanged(deviceId: deviceId, connected: false, error: nil) { _ in }
@@ -291,6 +293,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func cleanUpConnection(deviceId: String) {
+    let deviceId = deviceId.normalizedDeviceId
     characteristicReadFutures.removeAll { future in
       if future.deviceId == deviceId {
         future.result(
@@ -341,6 +344,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func discoverServices(deviceId: String, withDescriptors: Bool, completion: @escaping (Result<[UniversalBleService], Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(
         Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)"))
@@ -379,6 +383,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func setNotifiable(deviceId: String, service: String, characteristic: String, bleInputProperty: BleInputProperty, completion: @escaping (Result<Void, any Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("SET_NOTIFY -> \(deviceId) \(service) \(characteristic) input=\(bleInputProperty)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)")))
@@ -406,6 +411,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func readValue(deviceId: String, service: String, characteristic: String, completion: @escaping (Result<FlutterStandardTypedData, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("READ -> \(deviceId) \(service) \(characteristic)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")))
@@ -424,6 +430,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func writeValue(deviceId: String, service: String, characteristic: String, value: FlutterStandardTypedData, bleOutputProperty: BleOutputProperty, completion: @escaping (Result<Void, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("WRITE -> \(deviceId) \(service) \(characteristic) len=\(value.data.count) property=\(bleOutputProperty)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")))
@@ -479,6 +486,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func readRssi(deviceId: String, completion: @escaping (Result<Int64, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("READ_RSSI -> \(deviceId)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)")))
@@ -775,6 +783,10 @@ extension CBPeripheral {
 }
 
 extension String {
+  var normalizedDeviceId: String {
+    UUID(uuidString: self)?.uuidString ?? self
+  }
+
   func getPeripheral(manager: CBCentralManager) throws -> CBPeripheral {
     guard let peripheral = findPeripheral(manager: manager) else {
       throw createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")
@@ -783,13 +795,14 @@ extension String {
   }
 
   func findPeripheral(manager: CBCentralManager) -> CBPeripheral? {
-    if let peripheral = discoveredPeripherals[self] {
+    let deviceId = normalizedDeviceId
+    if let peripheral = discoveredPeripherals[deviceId] {
       return peripheral
     }
-    if let uuid = UUID(uuidString: self) {
+    if let uuid = UUID(uuidString: deviceId) {
       let peripherals = manager.retrievePeripherals(withIdentifiers: [uuid])
       if let peripheral = peripherals.first {
-        discoveredPeripherals[self] = peripheral
+        discoveredPeripherals[deviceId] = peripheral
         return peripheral
       }
     }

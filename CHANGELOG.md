@@ -1,3 +1,7 @@
+## Unreleased
+
+* Darwin: normalize device IDs before tracking native operations so CoreBluetooth callbacks complete across UUID case differences.
+
 ## 2.2.6
 
 * Linux: cancel the original in-flight BlueZ connection attempt when disconnecting after a timeout or racing connect.
