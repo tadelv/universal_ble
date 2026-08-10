@@ -1,9 +1,9 @@
 #include <iostream>
 #include <list>
-#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace universal_ble
 {
@@ -29,6 +29,18 @@ namespace universal_ble
             return data.erase(key) > 0;
         }
 
+        bool remove(const Key &key, const Value &value)
+        {
+            std::unique_lock lock(mutex);
+            auto it = data.find(key);
+            if (it == data.end() || it->second != value)
+            {
+                return false;
+            }
+            data.erase(it);
+            return true;
+        }
+
         std::optional<Value> get(const Key &key) const
         {
             std::shared_lock lock(mutex);
@@ -42,7 +54,7 @@ namespace universal_ble
             data.clear();
         }
 
-        std::map<Key, Value> get_snapshot() const
+        std::unordered_map<Key, Value> get_snapshot() const
         {
             std::shared_lock lock(mutex);
             return data;
