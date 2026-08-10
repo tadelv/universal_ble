@@ -351,8 +351,9 @@ void UniversalBlePlugin::ReadValue(
     }
 
     gatt_characteristic.ReadValueAsync(BluetoothCacheMode::Uncached)
-        .Completed([&, result](IAsyncOperation<GattReadResult> const &sender,
-                               AsyncStatus const args) {
+        .Completed([device_id, service, characteristic, result](
+                       IAsyncOperation<GattReadResult> const &sender,
+                       AsyncStatus const args) {
           const auto read_value_result = sender.GetResults();
           const auto status = read_value_result.Status();
           if (status != GattCommunicationStatus::Success) {
@@ -418,7 +419,7 @@ void UniversalBlePlugin::WriteValue(
     }
 
     gatt_characteristic.WriteValueAsync(from_bytevc(value), write_option)
-        .Completed([&, result](
+        .Completed([device_id, service, characteristic, result](
                        IAsyncOperation<GattCommunicationStatus> const &sender,
                        AsyncStatus const args) {
           if (args == AsyncStatus::Error) {
@@ -574,7 +575,7 @@ fire_and_forget UniversalBlePlugin::InitializeAsync() {
 }
 
 fire_and_forget UniversalBlePlugin::PairAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     UniversalBleLogger::LogInfo("Trying to pair");
@@ -627,7 +628,7 @@ fire_and_forget UniversalBlePlugin::PairAsync(
 }
 
 fire_and_forget UniversalBlePlugin::CustomPairAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     const auto device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(
@@ -1444,7 +1445,7 @@ fire_and_forget UniversalBlePlugin::GetSystemDevicesAsync(
 }
 
 fire_and_forget UniversalBlePlugin::DiscoverServicesAsync(
-    const std::string &device_id, bool with_descriptors,
+    std::string device_id, bool with_descriptors,
     std::function<void(ErrorOr<flutter::EncodableList> reply)> result) {
   try {
     const auto it = connected_devices_.find(str_to_mac_address(device_id));
@@ -1454,19 +1455,17 @@ fire_and_forget UniversalBlePlugin::DiscoverServicesAsync(
       co_return;
     }
 
+    const auto gatt_map = it->second->gatt_map;
     auto universal_services = flutter::EncodableList();
-    for (auto &[service_id, service] : it->second->gatt_map) {
+    for (const auto &[service_id, service] : gatt_map) {
       flutter::EncodableList universal_characteristics;
       for (auto [char_id, characteristic] : service.characteristics) {
-        auto &c = characteristic.obj;
+        const auto c = characteristic.obj;
         const auto properties_value = c.CharacteristicProperties();
         auto properties = properties_to_flutter_encodable(properties_value);
         auto descriptors = flutter::EncodableList();
         if (with_descriptors) {
           try {
-            // move continuation to background and execute in safe thread
-            // context
-            co_await winrt::resume_background();
             auto descriptor_result =
                 co_await c.GetDescriptorsAsync(BluetoothCacheMode::Cached);
             if (descriptor_result.Status() ==
@@ -1508,7 +1507,7 @@ fire_and_forget UniversalBlePlugin::DiscoverServicesAsync(
 }
 
 fire_and_forget UniversalBlePlugin::IsPairedAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     const auto device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(
@@ -1528,24 +1527,25 @@ fire_and_forget UniversalBlePlugin::IsPairedAsync(
 }
 
 fire_and_forget UniversalBlePlugin::SetNotifiableAsync(
-    const std::string &device_id, const std::string &service,
-    const std::string &characteristic,
-    const BleInputProperty &ble_input_property,
+    std::string device_id, std::string service, std::string characteristic,
+    BleInputProperty ble_input_property,
     const std::function<void(std::optional<FlutterError> reply)> result) {
   UniversalBleLogger::LogDebugWithTimestamp(
       "SET_NOTIFY -> " + device_id + " " + service + " " + characteristic +
       " input=" + std::to_string(static_cast<int>(ble_input_property)));
   try {
-    const auto it = connected_devices_.find(str_to_mac_address(device_id));
+    const auto device_address = str_to_mac_address(device_id);
+    const auto it = connected_devices_.find(device_address);
     if (it == connected_devices_.end()) {
       result(create_flutter_error(UniversalBleErrorCode::kDeviceNotFound,
                                   "Unknown devicesId:" + device_id));
       co_return;
     }
 
-    auto &gatt_char = it->second->FetchCharacteristic(service, characteristic);
-
-    const auto properties = gatt_char.obj.CharacteristicProperties();
+    const auto device_agent = it->second.get();
+    const auto gatt_characteristic =
+        device_agent->FetchCharacteristic(service, characteristic).obj;
+    const auto properties = gatt_characteristic.CharacteristicProperties();
     auto descriptor_value =
         GattClientCharacteristicConfigurationDescriptorValue::None;
     if (ble_input_property == BleInputProperty::kNotification) {
@@ -1570,7 +1570,6 @@ fire_and_forget UniversalBlePlugin::SetNotifiableAsync(
       }
     }
 
-    const auto gatt_characteristic = gatt_char.obj;
     const auto uuid = to_uuidstr(gatt_characteristic.Uuid());
 
     // Write to the descriptor.
@@ -1597,6 +1596,18 @@ fire_and_forget UniversalBlePlugin::SetNotifiableAsync(
       result(create_flutter_error_from_gatt_communication_status(status));
       co_return;
     }
+
+    const auto current = connected_devices_.find(device_address);
+    if (current == connected_devices_.end() ||
+        current->second.get() != device_agent ||
+        current->second->gatt_map.empty()) {
+      result(create_flutter_error(
+          UniversalBleErrorCode::kDeviceDisconnected,
+          "Device disconnected during notification update"));
+      co_return;
+    }
+    auto &gatt_char =
+        current->second->FetchCharacteristic(service, characteristic);
 
     // Register/UnRegister handler for the ValueChanged event.
     if (descriptor_value ==

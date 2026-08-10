@@ -1,6 +1,7 @@
 ## Unreleased
 
 * Darwin: normalize device IDs before tracking native operations so CoreBluetooth callbacks complete across UUID case differences.
+* Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
 
 ## 2.2.6
 
