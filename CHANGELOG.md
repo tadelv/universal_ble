@@ -2,6 +2,8 @@
 
 * Windows: cancel pending connection attempts before they can publish a late connection.
 * Windows: release scan watchers, connection callbacks, and GATT resources when the plugin is destroyed.
+* Android: close central GATT resources and unregister the host channel when the Flutter engine detaches.
+* Darwin: normalize device IDs before tracking native operations so CoreBluetooth callbacks complete across UUID case differences.
 * Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
 
 ## 2.2.6

@@ -129,8 +129,8 @@ class UniversalBleLinux extends UniversalBlePlatform {
     await stopScan();
 
     _bleFilter.scanFilter = scanFilter;
-    _isScanActive = true;
     await adapter.startDiscovery();
+    _isScanActive = true;
 
     for (final device in _client?.devices ?? const <BlueZDevice>[]) {
       await _onDeviceAdd(device, _runtimeGeneration);
@@ -140,17 +140,16 @@ class UniversalBleLinux extends UniversalBlePlatform {
   @override
   Future<void> stopScan() async {
     await _ensureInitialized();
+    _isScanActive = false;
     try {
-      _isScanActive = false;
       if (_activeAdapter?.discovering == true) {
         await _activeAdapter?.stopDiscovery();
       }
+    } finally {
       await Future.wait(
         _deviceAdvertisementSubscriptions.values.map((s) => s.cancel()),
       );
       _deviceAdvertisementSubscriptions.clear();
-    } catch (e) {
-      UniversalLogger.logError("stopScan error: $e");
     }
   }
 
