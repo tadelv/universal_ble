@@ -351,8 +351,9 @@ void UniversalBlePlugin::ReadValue(
     }
 
     gatt_characteristic.ReadValueAsync(BluetoothCacheMode::Uncached)
-        .Completed([&, result](IAsyncOperation<GattReadResult> const &sender,
-                               AsyncStatus const args) {
+        .Completed([device_id, service, characteristic, result](
+                       IAsyncOperation<GattReadResult> const &sender,
+                       AsyncStatus const args) {
           const auto read_value_result = sender.GetResults();
           const auto status = read_value_result.Status();
           if (status != GattCommunicationStatus::Success) {
@@ -418,7 +419,7 @@ void UniversalBlePlugin::WriteValue(
     }
 
     gatt_characteristic.WriteValueAsync(from_bytevc(value), write_option)
-        .Completed([&, result](
+        .Completed([device_id, service, characteristic, result](
                        IAsyncOperation<GattCommunicationStatus> const &sender,
                        AsyncStatus const args) {
           if (args == AsyncStatus::Error) {
@@ -574,7 +575,7 @@ fire_and_forget UniversalBlePlugin::InitializeAsync() {
 }
 
 fire_and_forget UniversalBlePlugin::PairAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     UniversalBleLogger::LogInfo("Trying to pair");
@@ -627,7 +628,7 @@ fire_and_forget UniversalBlePlugin::PairAsync(
 }
 
 fire_and_forget UniversalBlePlugin::CustomPairAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     const auto device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(
@@ -1444,7 +1445,7 @@ fire_and_forget UniversalBlePlugin::GetSystemDevicesAsync(
 }
 
 fire_and_forget UniversalBlePlugin::DiscoverServicesAsync(
-    const std::string &device_id, bool with_descriptors,
+    std::string device_id, bool with_descriptors,
     std::function<void(ErrorOr<flutter::EncodableList> reply)> result) {
   try {
     const auto it = connected_devices_.find(str_to_mac_address(device_id));
@@ -1508,7 +1509,7 @@ fire_and_forget UniversalBlePlugin::DiscoverServicesAsync(
 }
 
 fire_and_forget UniversalBlePlugin::IsPairedAsync(
-    const std::string &device_id,
+    std::string device_id,
     const std::function<void(ErrorOr<bool> reply)> result) {
   try {
     const auto device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(
@@ -1528,9 +1529,8 @@ fire_and_forget UniversalBlePlugin::IsPairedAsync(
 }
 
 fire_and_forget UniversalBlePlugin::SetNotifiableAsync(
-    const std::string &device_id, const std::string &service,
-    const std::string &characteristic,
-    const BleInputProperty &ble_input_property,
+    std::string device_id, std::string service, std::string characteristic,
+    BleInputProperty ble_input_property,
     const std::function<void(std::optional<FlutterError> reply)> result) {
   UniversalBleLogger::LogDebugWithTimestamp(
       "SET_NOTIFY -> " + device_id + " " + service + " " + characteristic +
