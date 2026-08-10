@@ -1,6 +1,7 @@
 ## Unreleased
 
 * Android: close central GATT resources and unregister the host channel when the Flutter engine detaches.
+* Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
 
 ## 2.2.6
 

@@ -15,6 +15,7 @@ import android.os.SystemClock
 import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import java.util.IdentityHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -154,8 +155,9 @@ internal class UniversalBlePluginTest {
     }
 
     @Test
-    fun engineDetachClosesConnectionsAndUnregistersCentralChannel() {
+    fun engineDetachClosesOnlyOwnedConnectionsAndUnregistersCentralChannel() {
         val plugin = UniversalBlePlugin()
+        val otherPlugin = UniversalBlePlugin()
         val handler = handler()
         val manager = mock(BluetoothManager::class.java)
         val adapter = mock(BluetoothAdapter::class.java)
@@ -164,32 +166,43 @@ internal class UniversalBlePluginTest {
         val peripheral = mock(UniversalBlePeripheralPlugin::class.java)
         val binding = mock(FlutterPlugin.FlutterPluginBinding::class.java)
         val messenger = mock(BinaryMessenger::class.java)
-        val gatt = mock(BluetoothGatt::class.java)
-        val device = mock(BluetoothDevice::class.java)
-        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val ownedGatt = mock(BluetoothGatt::class.java)
+        val otherGatt = mock(BluetoothGatt::class.java)
+        val ownedDevice = mock(BluetoothDevice::class.java)
+        val otherDevice = mock(BluetoothDevice::class.java)
+        val ownedDeviceId = "AA:BB:CC:DD:EE:FF"
+        val otherDeviceId = "11:22:33:44:55:66"
 
         `when`(manager.adapter).thenReturn(adapter)
         `when`(adapter.bluetoothLeScanner).thenReturn(scanner)
         `when`(binding.binaryMessenger).thenReturn(messenger)
-        `when`(gatt.device).thenReturn(device)
-        `when`(device.address).thenReturn(deviceId)
+        `when`(ownedGatt.device).thenReturn(ownedDevice)
+        `when`(otherGatt.device).thenReturn(otherDevice)
+        `when`(ownedDevice.address).thenReturn(ownedDeviceId)
+        `when`(otherDevice.address).thenReturn(otherDeviceId)
         plugin.setField("mainThreadHandler", handler)
         plugin.setField("safeScanner", SafeScanner(manager, handler))
         plugin.setField("context", context)
         plugin.setField("peripheralPlugin", peripheral)
-        gatt.saveCacheIfNeeded()
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[ownedGatt] = Unit
+        otherPlugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[otherGatt] = Unit
+        ownedGatt.saveCacheIfNeeded()
+        otherGatt.saveCacheIfNeeded()
 
         try {
             plugin.onDetachedFromEngine(binding)
 
-            verify(gatt).close()
-            assertNull(deviceId.findGatt())
+            verify(ownedGatt).close()
+            assertNull(ownedDeviceId.findGatt())
+            verify(otherGatt, never()).close()
+            assertSame(otherGatt, otherDeviceId.findGatt())
             verify(messenger).setMessageHandler(
                 eq("dev.flutter.pigeon.universal_ble.UniversalBlePlatformChannel.disconnect"),
                 isNull(),
             )
         } finally {
-            gatt.removeCacheIfCurrent()
+            ownedGatt.removeCacheIfCurrent()
+            otherGatt.removeCacheIfCurrent()
         }
     }
 
