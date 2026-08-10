@@ -145,23 +145,22 @@ private:
   fire_and_forget InitializeAsync();
   fire_and_forget ConnectAsync(uint64_t bluetooth_address);
   fire_and_forget SetNotifiableAsync(
-      const std::string &device_id, const std::string &service,
-      const std::string &characteristic,
-      const BleInputProperty &ble_input_property,
+      std::string device_id, std::string service, std::string characteristic,
+      BleInputProperty ble_input_property,
       std::function<void(std::optional<FlutterError> reply)> result);
-  fire_and_forget PairAsync(const std::string &device_id,
+  fire_and_forget PairAsync(std::string device_id,
                             std::function<void(ErrorOr<bool> reply)> result);
   fire_and_forget
-  CustomPairAsync(const std::string &device_id,
+  CustomPairAsync(std::string device_id,
                   std::function<void(ErrorOr<bool> reply)> result);
   static fire_and_forget GetSystemDevicesAsync(
       std::vector<std::string> with_services,
       std::function<void(ErrorOr<flutter::EncodableList> reply)> result);
   static fire_and_forget
-  IsPairedAsync(const std::string &device_id,
+  IsPairedAsync(std::string device_id,
                 std::function<void(ErrorOr<bool> reply)> result);
   fire_and_forget DiscoverServicesAsync(
-      const std::string &device_id, bool with_descriptors,
+      std::string device_id, bool with_descriptors,
       std::function<void(ErrorOr<flutter::EncodableList> reply)> result);
 
   void
