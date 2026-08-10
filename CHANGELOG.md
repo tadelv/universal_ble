@@ -1,6 +1,7 @@
 ## Unreleased
 
 * Windows: release scan watchers, connection callbacks, and GATT resources when the plugin is destroyed.
+* Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
 
 ## 2.2.6
 
