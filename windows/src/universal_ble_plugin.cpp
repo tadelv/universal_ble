@@ -85,6 +85,7 @@ UniversalBlePlugin::UniversalBlePlugin(
 }
 
 UniversalBlePlugin::~UniversalBlePlugin() {
+  ResetState();
   ClearServices();
   peripheral_callback_channel_.reset();
 }
@@ -921,18 +922,33 @@ void UniversalBlePlugin::SetupDeviceWatcher() {
 
 void UniversalBlePlugin::DisposeDeviceWatcher() {
   if (device_watcher_ != nullptr) {
-    device_watcher_.Added(device_watcher_added_token_);
-    device_watcher_.Updated(device_watcher_updated_token_);
-    device_watcher_.Removed(device_watcher_removed_token_);
-    device_watcher_.EnumerationCompleted(
-        device_watcher_enumeration_completed_token_);
-    device_watcher_.Stopped(device_watcher_stopped_token_);
-    const auto status = device_watcher_.Status();
-    // std::cout << "DisposingDeviceWatcher, CurrentState: " <<
-    // DeviceWatcherStatusToString(status) << std::endl;
-    if (status == DeviceWatcherStatus::Started) {
-      device_watcher_.Stop();
-    }
+    const auto best_effort = [](const char *operation, const auto &action) {
+      try {
+        action();
+      } catch (...) {
+        log_and_swallow_unknown(operation);
+      }
+    };
+    best_effort("DisposeDeviceWatcher: failed to remove Added handler",
+                [&] { device_watcher_.Added(device_watcher_added_token_); });
+    best_effort("DisposeDeviceWatcher: failed to remove Updated handler",
+                [&] { device_watcher_.Updated(device_watcher_updated_token_); });
+    best_effort("DisposeDeviceWatcher: failed to remove Removed handler",
+                [&] { device_watcher_.Removed(device_watcher_removed_token_); });
+    best_effort(
+        "DisposeDeviceWatcher: failed to remove EnumerationCompleted handler",
+        [&] {
+          device_watcher_.EnumerationCompleted(
+              device_watcher_enumeration_completed_token_);
+        });
+    best_effort("DisposeDeviceWatcher: failed to remove Stopped handler", [&] {
+      device_watcher_.Stopped(device_watcher_stopped_token_);
+    });
+    best_effort("DisposeDeviceWatcher: failed to stop watcher", [&] {
+      if (device_watcher_.Status() == DeviceWatcherStatus::Started) {
+        device_watcher_.Stop();
+      }
+    });
     device_watcher_ = nullptr;
     device_watcher_devices_.clear();
     device_watcher_id_to_mac_.clear();
