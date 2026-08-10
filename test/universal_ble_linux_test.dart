@@ -13,6 +13,9 @@ import 'package:universal_ble/universal_ble.dart';
 class _AdapterObject extends DBusObject {
   _AdapterObject() : super(DBusObjectPath('/org/bluez/hci0'));
 
+  bool discovering = false;
+  bool failStartDiscovery = false;
+  bool failStopDiscovery = false;
   int removeDeviceCalls = 0;
 
   @override
@@ -22,14 +25,34 @@ class _AdapterObject extends DBusObject {
       'AddressType': DBusString('public'),
       'Name': DBusString('hci0'),
       'Powered': DBusBoolean(true),
-      'Discovering': DBusBoolean(false),
+      'Discovering': DBusBoolean(discovering),
     },
   };
+
+  Future<void> setDiscovering(bool value) async {
+    discovering = value;
+    await emitPropertiesChanged(
+      'org.bluez.Adapter1',
+      changedProperties: {'Discovering': DBusBoolean(value)},
+    );
+  }
 
   @override
   Future<DBusMethodResponse> handleMethodCall(DBusMethodCall call) async {
     if (call.interface != 'org.bluez.Adapter1') {
       return DBusMethodErrorResponse.unknownInterface();
+    }
+    if (call.name == 'StartDiscovery') {
+      if (failStartDiscovery) {
+        return DBusMethodErrorResponse('org.bluez.Error.Failed');
+      }
+      await setDiscovering(true);
+    }
+    if (call.name == 'StopDiscovery') {
+      if (failStopDiscovery) {
+        return DBusMethodErrorResponse('org.bluez.Error.Failed');
+      }
+      await setDiscovering(false);
     }
     if (call.name == 'RemoveDevice') removeDeviceCalls++;
     return DBusMethodSuccessResponse();
@@ -464,6 +487,47 @@ void main() {
     },
     skip: Platform.isWindows,
   );
+
+  test(
+    'failed discovery start does not activate scan results',
+    () async {
+      final results = <BleDevice>[];
+      final subscription = plugin.scanStream.listen(results.add);
+      await plugin.getBluetoothAvailabilityState();
+      adapter.failStartDiscovery = true;
+
+      await expectLater(
+        plugin.startScan(),
+        throwsA(isA<BlueZFailedException>()),
+      );
+      await bluezService.unregisterObject(device);
+      device = _DeviceObject(paired: true, connected: false);
+      await bluezService.registerObject(device);
+
+      bool? paired;
+      for (var i = 0; i < 100; i++) {
+        try {
+          paired = await plugin.isPaired('AA:BB:CC:DD:EE:FF');
+          if (paired == true) break;
+        } on UniversalBleException {
+          paired = null;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(paired, isTrue);
+      expect(results, isEmpty);
+      await subscription.cancel();
+    },
+    skip: Platform.isWindows,
+  );
+
+  test('stopScan propagates discovery stop failures', () async {
+    await plugin.startScan();
+    adapter.failStopDiscovery = true;
+
+    await expectLater(plugin.stopScan(), throwsA(isA<BlueZFailedException>()));
+  }, skip: Platform.isWindows);
 
   test(
     'device removal allows an immediate same-path replacement',
