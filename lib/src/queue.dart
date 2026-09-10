@@ -113,7 +113,7 @@ class Queue {
     if (_paused) return;
     if (_nextCycle.isNotEmpty &&
         _state == _QueueState.running &&
-        _activeItems.length <= 1) {
+        _activeItems.isEmpty) {
       final processId = _lastProcessId;
       _activeItems.add(processId);
       final item = _nextCycle.first;

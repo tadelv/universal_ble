@@ -196,6 +196,13 @@ void main() {
           QueueDiagnosticsState.running,
           reason: 'a stale update must not dispose a live queue',
         );
+        expect(
+          mock.startedWrites,
+          ['device-a'],
+          reason:
+              'confirming a live link must not dispatch the next command while '
+              'one is still running',
+        );
 
         blocker.complete();
         await inFlight;
