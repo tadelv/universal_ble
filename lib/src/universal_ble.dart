@@ -39,13 +39,21 @@ class UniversalBle {
   /// A raw `isConnected == false` update is confirmed against the platform
   /// link state first: a late update for a link that a newer connection
   /// attempt already re-established must not fail the current connection's
-  /// queued commands.
+  /// queued commands. The device queue is held while that confirmation is in
+  /// flight, so a genuine disconnect still cancels pending commands before the
+  /// next one can dispatch.
   static UniversalBlePlatform _wireQueueDrain(UniversalBlePlatform platform) {
     _queueDrainSubscription?.cancel();
     _queueDrainSubscription = platform.bleConnectionUpdateStreamController.stream
         .where((e) => !e.isConnected)
         .listen((e) async {
-      if (await _linkStillConnected(platform, e.deviceId)) return;
+      // Hold the device's queue synchronously so nothing else dispatches while
+      // the link state is still unknown, then settle it exactly once.
+      _bleCommandQueue.pauseQueue(e.deviceId);
+      if (await _linkStillConnected(platform, e.deviceId)) {
+        _bleCommandQueue.resumeQueue(e.deviceId);
+        return;
+      }
       _bleCommandQueue.clearQueue(
         e.deviceId,
         error: UniversalBleException(

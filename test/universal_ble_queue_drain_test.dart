@@ -21,9 +21,17 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   /// needs.
   final Map<String, BleConnectionState> connectionStates = {};
 
+  /// Holds the authoritative link probe open when set.
+  Completer<BleConnectionState>? connectionStateBlocker;
+
   @override
-  Future<BleConnectionState> getConnectionState(String deviceId) async =>
-      connectionStates[deviceId.toLowerCase()] ?? BleConnectionState.connected;
+  Future<BleConnectionState> getConnectionState(String deviceId) {
+    final blocker = connectionStateBlocker;
+    if (blocker != null) return blocker.future;
+    return Future.value(
+      connectionStates[deviceId.toLowerCase()] ?? BleConnectionState.connected,
+    );
+  }
 
   @override
   Future<void> connect(
@@ -193,6 +201,79 @@ void main() {
         await inFlight;
         expect(await pendingOutcome, 'completed');
         expect(mock.completedWrites, hasLength(2));
+      },
+    );
+
+    test(
+      'genuine disconnect still cancels queued work when the link probe is slow',
+      () async {
+        final writeBlocker = Completer<void>();
+        mock.writeBlockers['device-a'] = writeBlocker;
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        // First write occupies the queue head, second stays pending.
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+        final pendingOutcome = pending.then<String>(
+          (_) => 'completed',
+          onError: (_) => 'failed',
+        );
+
+        await pumpEventQueue();
+        expect(mock.startedWrites, ['device-a']);
+
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        // The in-flight write finishes while the link probe is still pending.
+        writeBlocker.complete();
+        await inFlight;
+        await pumpEventQueue();
+        expect(
+          mock.startedWrites,
+          ['device-a'],
+          reason:
+              'an unconfirmed disconnect must hold the queue instead of '
+              'letting the next command dispatch',
+        );
+
+        probe.complete(BleConnectionState.disconnected);
+        await pumpEventQueue();
+        expect(await pendingOutcome, 'failed');
+        expect(mock.startedWrites, ['device-a']);
+      },
+    );
+
+    test(
+      'queued work resumes when a slow link probe proves the link is alive',
+      () async {
+        final writeBlocker = Completer<void>();
+        mock.writeBlockers['device-a'] = writeBlocker;
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+
+        await pumpEventQueue();
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        writeBlocker.complete();
+        await inFlight;
+        await pumpEventQueue();
+        expect(
+          mock.completedWrites.where((entry) => entry.deviceId == 'device-a'),
+          hasLength(1),
+        );
+
+        probe.complete(BleConnectionState.connected);
+        await expectLater(pending, completes);
+        expect(
+          mock.completedWrites.where((entry) => entry.deviceId == 'device-a'),
+          hasLength(2),
+        );
       },
     );
 

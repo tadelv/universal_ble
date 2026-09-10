@@ -63,6 +63,25 @@ class BleCommandQueue {
     };
   }
 
+  String _queueKey(String id) =>
+      _queueMap.containsKey(id) ? id : id.toLowerCase();
+
+  /// Hold [id]'s queue without deciding the outcome of its pending items.
+  /// Returns whether a queue existed; a missing queue needs no hold because
+  /// nothing can be dispatched from it.
+  bool pauseQueue(String? id) {
+    final entry = id == null ? null : _queueMap[_queueKey(id)];
+    if (entry == null) return false;
+    entry.queue.pause();
+    return true;
+  }
+
+  /// Resume [id]'s queue after a hold proves the connection is still live.
+  void resumeQueue(String? id) {
+    if (id == null) return;
+    _queueMap[_queueKey(id)]?.queue.resume();
+  }
+
   Queue _queue(String? id) {
     final queueKey = id ?? globalQueueId;
     return _queueMap[queueKey]?.queue ?? _newQueue(queueKey);
@@ -85,7 +104,7 @@ class BleCommandQueue {
   }
 
   QueueDiagnostics getQueueDiagnostics(String id) {
-    final queueKey = _queueMap.containsKey(id) ? id : id.toLowerCase();
+    final queueKey = _queueKey(id);
     final entry = _queueMap[queueKey];
     if (entry == null) {
       return QueueDiagnostics(
@@ -131,7 +150,7 @@ class BleCommandQueue {
       return QueueClearSummary(results);
     }
 
-    final queueKey = _queueMap.containsKey(id) ? id : id.toLowerCase();
+    final queueKey = _queueKey(id);
     final queueEntry = _queueMap.remove(queueKey);
     if (queueEntry == null) {
       return QueueClearSummary([
