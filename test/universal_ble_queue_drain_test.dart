@@ -16,9 +16,14 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   final List<Completer<void>> writeStartMarkers = [];
   final List<({String deviceId, String characteristic})> completedWrites = [];
 
+  /// Authoritative link state. Absent entries report
+  /// [BleConnectionState.connected], so a test states only the disconnect it
+  /// needs.
+  final Map<String, BleConnectionState> connectionStates = {};
+
   @override
   Future<BleConnectionState> getConnectionState(String deviceId) async =>
-      BleConnectionState.connected;
+      connectionStates[deviceId.toLowerCase()] ?? BleConnectionState.connected;
 
   @override
   Future<void> connect(
@@ -33,6 +38,13 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   @override
   Future<void> disconnect(String deviceId) async {
     disconnectCalls.add(deviceId);
+    disconnectDevice(deviceId);
+  }
+
+  /// Records the authoritative link state for [deviceId] as disconnected and
+  /// publishes the connection update.
+  void disconnectDevice(String deviceId) {
+    connectionStates[deviceId.toLowerCase()] = BleConnectionState.disconnected;
     updateConnection(deviceId, false);
   }
 
@@ -100,7 +112,7 @@ void main() {
       final pending = write('device-a');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       // Pending command fails right away with deviceDisconnected — it must
       // NOT wait out its own 5s timeout.
@@ -126,7 +138,7 @@ void main() {
       final pending = write('DEVICE-A');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       await expectLater(
         pending.timeout(const Duration(milliseconds: 500)),
@@ -141,6 +153,49 @@ void main() {
       await expectLater(inFlight, throwsA(isA<TimeoutException>()));
     });
 
+    test(
+      'stale disconnect update does not cancel queued work on a live link',
+      () async {
+        final blocker = Completer<void>();
+        mock.writeBlockers['device-a'] = blocker;
+
+        // First write occupies the queue head, second stays pending.
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+        var pendingSettled = false;
+        final pendingOutcome = pending
+            .then<String>((_) => 'completed', onError: (_) => 'failed')
+            .whenComplete(() => pendingSettled = true);
+
+        await pumpEventQueue();
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.running,
+        );
+
+        // Late disconnect for a link the platform still reports connected.
+        mock.connectionStates['device-a'] = BleConnectionState.connected;
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        expect(
+          pendingSettled,
+          isFalse,
+          reason: 'a stale update must not settle the current queue',
+        );
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.running,
+          reason: 'a stale update must not dispose a live queue',
+        );
+
+        blocker.complete();
+        await inFlight;
+        expect(await pendingOutcome, 'completed');
+        expect(mock.completedWrites, hasLength(2));
+      },
+    );
+
     test('drain only affects the disconnected device', () async {
       mock.hangingWrites.add('device-a');
 
@@ -152,7 +207,7 @@ void main() {
       final pendingB = write('device-b');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       expect(await pendingB.then((_) => 'completed'), 'completed');
       expect(
@@ -238,7 +293,7 @@ void main() {
       await write('device-b');
       expect(mock.startedWrites, ['device-a', 'device-b']);
 
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
       await pumpEventQueue();
       mock.writeBlockers.remove('device-a');
       await write('device-a');
