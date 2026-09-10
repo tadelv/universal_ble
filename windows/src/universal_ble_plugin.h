@@ -21,6 +21,7 @@
 #include "helper/utils.h"
 #include "ui_thread_handler.hpp"
 #include "universal_ble_thread_safe.h"
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -128,6 +129,8 @@ private:
 
   std::unordered_map<uint64_t, std::unique_ptr<BluetoothDeviceAgent>>
       connected_devices_{};
+  ThreadSafeMap<uint64_t, std::shared_ptr<std::atomic_bool>>
+      pending_connection_attempts_{};
   ThreadSafeMap<std::string, DeviceInformation> device_watcher_devices_{};
   ThreadSafeMap<std::string, UniversalBleScanResult> scan_results_{};
   // Maps DeviceInformation.Id() -> MAC address string used as key in
@@ -143,25 +146,26 @@ private:
   event_revoker<IRadio> radio_state_changed_revoker_;
 
   fire_and_forget InitializeAsync();
-  fire_and_forget ConnectAsync(uint64_t bluetooth_address);
+  fire_and_forget ConnectAsync(
+      uint64_t bluetooth_address,
+      std::shared_ptr<std::atomic_bool> connection_attempt);
   fire_and_forget SetNotifiableAsync(
-      const std::string &device_id, const std::string &service,
-      const std::string &characteristic,
-      const BleInputProperty &ble_input_property,
+      std::string device_id, std::string service, std::string characteristic,
+      BleInputProperty ble_input_property,
       std::function<void(std::optional<FlutterError> reply)> result);
-  fire_and_forget PairAsync(const std::string &device_id,
+  fire_and_forget PairAsync(std::string device_id,
                             std::function<void(ErrorOr<bool> reply)> result);
   fire_and_forget
-  CustomPairAsync(const std::string &device_id,
+  CustomPairAsync(std::string device_id,
                   std::function<void(ErrorOr<bool> reply)> result);
   static fire_and_forget GetSystemDevicesAsync(
       std::vector<std::string> with_services,
       std::function<void(ErrorOr<flutter::EncodableList> reply)> result);
   static fire_and_forget
-  IsPairedAsync(const std::string &device_id,
+  IsPairedAsync(std::string device_id,
                 std::function<void(ErrorOr<bool> reply)> result);
   fire_and_forget DiscoverServicesAsync(
-      const std::string &device_id, bool with_descriptors,
+      std::string device_id, bool with_descriptors,
       std::function<void(ErrorOr<flutter::EncodableList> reply)> result);
 
   void
@@ -185,6 +189,14 @@ private:
                                std::optional<std::string> error = std::nullopt);
   void NotifyConnectionException(uint64_t bluetooth_address,
                                  const std::string &error_message);
+  bool IsConnectionAttemptCurrent(
+      uint64_t bluetooth_address,
+      const std::shared_ptr<std::atomic_bool> &connection_attempt) const;
+  bool CompleteConnectionAttempt(
+      uint64_t bluetooth_address,
+      const std::shared_ptr<std::atomic_bool> &connection_attempt);
+  void CancelConnectionAttempt(uint64_t bluetooth_address);
+  void CancelConnectionAttempts();
   void CleanConnection(uint64_t bluetooth_address);
   void ResetState();
   void

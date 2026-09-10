@@ -95,7 +95,14 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   private var activeServiceDiscoveries: [String: UniversalBleAsyncServiceDiscovery] = [:]
   private var characteristicReadFutures = [CharacteristicReadFuture]()
   private var characteristicWriteFutures = [CharacteristicWriteFuture]()
-  private var characteristicWriteWithoutResponseFutures = [CharacteristicWriteFuture]()
+  private var pendingWriteWithoutResponse: [
+    (
+      deviceId: String,
+      characteristic: CBCharacteristic,
+      data: Data,
+      result: (Result<Void, Error>) -> Void
+    )
+  ] = []
   private var characteristicNotifyFutures = [CharacteristicNotifyFuture]()
   private var discoverServicesFutures = [DiscoverServicesFuture]()
   private var rssiReadFutures = [RssiReadFuture]()
@@ -207,6 +214,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func connect(deviceId: String, autoConnect: Bool?, platformConfig: ConnectionPlatformConfig?) throws {
+    let deviceId = deviceId.normalizedDeviceId
     let peripheral = try deviceId.getPeripheral(manager: manager)
     peripheral.delegate = self
     if peripheral.state == .connected {
@@ -260,6 +268,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func disconnect(deviceId: String) throws {
+    let deviceId = deviceId.normalizedDeviceId
     autoConnectDevices.remove(deviceId)
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       callbackChannel.onConnectionChanged(deviceId: deviceId, connected: false, error: nil) { _ in }
@@ -291,6 +300,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func cleanUpConnection(deviceId: String) {
+    let deviceId = deviceId.normalizedDeviceId
     characteristicReadFutures.removeAll { future in
       if future.deviceId == deviceId {
         future.result(
@@ -303,6 +313,15 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
     characteristicWriteFutures.removeAll { future in
       if future.deviceId == deviceId {
         future.result(
+          Result.failure(createFlutterError(code: .deviceDisconnected, message: "Device Disconnected"))
+        )
+        return true
+      }
+      return false
+    }
+    pendingWriteWithoutResponse.removeAll { pending in
+      if pending.deviceId == deviceId {
+        pending.result(
           Result.failure(createFlutterError(code: .deviceDisconnected, message: "Device Disconnected"))
         )
         return true
@@ -341,6 +360,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func discoverServices(deviceId: String, withDescriptors: Bool, completion: @escaping (Result<[UniversalBleService], Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(
         Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)"))
@@ -379,6 +399,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func setNotifiable(deviceId: String, service: String, characteristic: String, bleInputProperty: BleInputProperty, completion: @escaping (Result<Void, any Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("SET_NOTIFY -> \(deviceId) \(service) \(characteristic) input=\(bleInputProperty)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)")))
@@ -406,6 +427,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func readValue(deviceId: String, service: String, characteristic: String, completion: @escaping (Result<FlutterStandardTypedData, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("READ -> \(deviceId) \(service) \(characteristic)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")))
@@ -424,6 +446,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func writeValue(deviceId: String, service: String, characteristic: String, value: FlutterStandardTypedData, bleOutputProperty: BleOutputProperty, completion: @escaping (Result<Void, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("WRITE -> \(deviceId) \(service) \(characteristic) len=\(value.data.count) property=\(bleOutputProperty)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")))
@@ -434,27 +457,31 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
       return
     }
 
-    let type = bleOutputProperty == .withoutResponse ? CBCharacteristicWriteType.withoutResponse : CBCharacteristicWriteType.withResponse
-
-    if type == CBCharacteristicWriteType.withResponse {
+    if bleOutputProperty == .withResponse {
       if !gattCharacteristic.properties.contains(.write) {
         completion(Result.failure(createFlutterError(code: .characteristicDoesNotSupportWrite, message: "Characteristic does not support write withResponse")))
         return
       }
-    } else if type == CBCharacteristicWriteType.withoutResponse {
-      if !gattCharacteristic.properties.contains(.writeWithoutResponse) {
-        completion(Result.failure(createFlutterError(code: .characteristicDoesNotSupportWriteWithoutResponse, message: "Characteristic does not support write withoutResponse")))
-        return
-      }
+      peripheral.writeValue(value.data, for: gattCharacteristic, type: .withResponse)
+      characteristicWriteFutures.append(CharacteristicWriteFuture(deviceId: deviceId, characteristicId: gattCharacteristic.uuid.uuidStr, serviceId: gattCharacteristic.service?.uuid.uuidStr, result: completion))
+      return
     }
-    peripheral.writeValue(value.data, for: gattCharacteristic, type: type)
 
-    // Wait for future response
-    let future = CharacteristicWriteFuture(deviceId: deviceId, characteristicId: gattCharacteristic.uuid.uuidStr, serviceId: gattCharacteristic.service?.uuid.uuidStr, result: completion)
-    if type == CBCharacteristicWriteType.withResponse {
-      characteristicWriteFutures.append(future)
+    if !gattCharacteristic.properties.contains(.writeWithoutResponse) {
+      completion(Result.failure(createFlutterError(code: .characteristicDoesNotSupportWriteWithoutResponse, message: "Characteristic does not support write withoutResponse")))
+      return
+    }
+
+    if peripheral.canSendWriteWithoutResponse {
+      peripheral.writeValue(value.data, for: gattCharacteristic, type: .withoutResponse)
+      completion(Result.success(()))
     } else {
-      characteristicWriteWithoutResponseFutures.append(future)
+      pendingWriteWithoutResponse.append((
+        deviceId: deviceId,
+        characteristic: gattCharacteristic,
+        data: value.data,
+        result: completion
+      ))
     }
   }
 
@@ -479,6 +506,7 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   func readRssi(deviceId: String, completion: @escaping (Result<Int64, Error>) -> Void) {
+    let deviceId = deviceId.normalizedDeviceId
     UniversalBleLogger.shared.logDebug("READ_RSSI -> \(deviceId)")
     guard let peripheral = deviceId.findPeripheral(manager: manager) else {
       completion(Result.failure(createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(deviceId)")))
@@ -656,12 +684,14 @@ private class BleCentralDarwin: NSObject, UniversalBlePlatformChannel, CBCentral
   }
 
   public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
-    characteristicWriteWithoutResponseFutures.removeAll { future in
-      if future.deviceId == peripheral.uuid.uuidString {
-        future.result(Result.success({}()))
-        return true
+    let deviceId = peripheral.uuid.uuidString
+    while peripheral.canSendWriteWithoutResponse {
+      guard let index = pendingWriteWithoutResponse.firstIndex(where: { $0.deviceId == deviceId }) else {
+        return
       }
-      return false
+      let pending = pendingWriteWithoutResponse.remove(at: index)
+      peripheral.writeValue(pending.data, for: pending.characteristic, type: .withoutResponse)
+      pending.result(Result.success(()))
     }
   }
 
@@ -775,6 +805,10 @@ extension CBPeripheral {
 }
 
 extension String {
+  var normalizedDeviceId: String {
+    UUID(uuidString: self)?.uuidString ?? self
+  }
+
   func getPeripheral(manager: CBCentralManager) throws -> CBPeripheral {
     guard let peripheral = findPeripheral(manager: manager) else {
       throw createFlutterError(code: .deviceNotFound, message: "Unknown deviceId:\(self)")
@@ -783,13 +817,14 @@ extension String {
   }
 
   func findPeripheral(manager: CBCentralManager) -> CBPeripheral? {
-    if let peripheral = discoveredPeripherals[self] {
+    let deviceId = normalizedDeviceId
+    if let peripheral = discoveredPeripherals[deviceId] {
       return peripheral
     }
-    if let uuid = UUID(uuidString: self) {
+    if let uuid = UUID(uuidString: deviceId) {
       let peripherals = manager.retrievePeripherals(withIdentifiers: [uuid])
       if let peripheral = peripherals.first {
-        discoveredPeripherals[self] = peripheral
+        discoveredPeripherals[deviceId] = peripheral
         return peripheral
       }
     }
