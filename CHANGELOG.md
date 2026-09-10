@@ -1,3 +1,7 @@
+## Unreleased
+
+* Confirm the link state before a disconnect drains a device's command queue: a late disconnect update for a link that has already reconnected no longer cancels the current connection's pending commands, and commands held during that confirmation resume only after the active command completes.
+
 ## 2.2.6
 
 * Linux: cancel the original in-flight BlueZ connection attempt when disconnecting after a timeout or racing connect.
