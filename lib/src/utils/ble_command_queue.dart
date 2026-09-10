@@ -7,6 +7,8 @@ class BleCommandQueue {
   Duration? timeout = const Duration(seconds: 10);
   OnQueueUpdate? onQueueUpdate;
   final Map<String, ({Queue queue, QueueType type})> _queueMap = {};
+  final Map<String, int> _holds = {};
+  int _lastHoldToken = 0;
   static const String globalQueueId = 'global';
 
   BleCommandQueue({this.queueType = QueueType.global});
@@ -66,20 +68,31 @@ class BleCommandQueue {
   String _queueKey(String id) =>
       _queueMap.containsKey(id) ? id : id.toLowerCase();
 
-  /// Hold [id]'s queue without deciding the outcome of its pending items.
-  /// Returns whether a queue existed; a missing queue needs no hold because
-  /// nothing can be dispatched from it.
-  bool pauseQueue(String? id) {
-    final entry = id == null ? null : _queueMap[_queueKey(id)];
-    if (entry == null) return false;
-    entry.queue.pause();
-    return true;
+  /// Holds [id]'s queue while a disconnect is still unconfirmed and returns the
+  /// token that owns the hold.
+  ///
+  /// The newest hold owns the queue, so an older confirmation can neither resume
+  /// nor clear it. A queue created while the hold is live starts paused: a
+  /// command issued during the confirmation window must not dispatch onto a link
+  /// that may already be gone.
+  int holdQueue(String id) {
+    final queueKey = _queueKey(id);
+    final token = ++_lastHoldToken;
+    _holds[queueKey] = token;
+    _queueMap[queueKey]?.queue.pause();
+    return token;
   }
 
-  /// Resume [id]'s queue after a hold proves the connection is still live.
-  void resumeQueue(String? id) {
-    if (id == null) return;
-    _queueMap[_queueKey(id)]?.queue.resume();
+  /// Whether [token] still owns [id]'s hold.
+  bool ownsQueueHold(String id, int token) => _holds[_queueKey(id)] == token;
+
+  /// Releases the hold owned by [token] and resumes [id]'s queue. A superseded
+  /// hold is ignored.
+  void releaseQueueHold(String id, int token) {
+    final queueKey = _queueKey(id);
+    if (_holds[queueKey] != token) return;
+    _holds.remove(queueKey);
+    _queueMap[queueKey]?.queue.resume();
   }
 
   Queue _queue(String? id) {
@@ -99,6 +112,7 @@ class BleCommandQueue {
         onQueueUpdate?.call(id, items);
       } catch (_) {}
     };
+    if (_holds.containsKey(id)) queue.pause();
     _queueMap[id] = (queue: queue, type: queueType);
     return queue;
   }
@@ -136,6 +150,7 @@ class BleCommandQueue {
       final entries = _queueMap.entries.toList()
         ..sort((a, b) => a.key.compareTo(b.key));
       _queueMap.clear();
+      _holds.clear();
       final results = [
         for (final entry in entries)
           _clearResult(
@@ -152,6 +167,7 @@ class BleCommandQueue {
 
     final queueKey = _queueKey(id);
     final queueEntry = _queueMap.remove(queueKey);
+    _holds.remove(queueKey);
     if (queueEntry == null) {
       return QueueClearSummary([
         QueueClearResult(

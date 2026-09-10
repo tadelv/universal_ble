@@ -48,12 +48,15 @@ class UniversalBle {
         .where((e) => !e.isConnected)
         .listen((e) async {
       // Hold the device's queue synchronously so nothing else dispatches while
-      // the link state is still unknown, then settle it exactly once.
-      _bleCommandQueue.pauseQueue(e.deviceId);
+      // the link state is still unknown, then settle it exactly once. Only the
+      // newest hold may settle, so a superseded probe cannot clear or resume a
+      // queue that a newer confirmation still owns.
+      final hold = _bleCommandQueue.holdQueue(e.deviceId);
       if (await _linkStillConnected(platform, e.deviceId)) {
-        _bleCommandQueue.resumeQueue(e.deviceId);
+        _bleCommandQueue.releaseQueueHold(e.deviceId, hold);
         return;
       }
+      if (!_bleCommandQueue.ownsQueueHold(e.deviceId, hold)) return;
       _bleCommandQueue.clearQueue(
         e.deviceId,
         error: UniversalBleException(

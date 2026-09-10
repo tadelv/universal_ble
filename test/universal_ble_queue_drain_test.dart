@@ -246,6 +246,69 @@ void main() {
     );
 
     test(
+      'a command issued while the disconnect is unconfirmed does not dispatch',
+      () async {
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        // No queue existed when the event arrived: the queue created now must
+        // still start held.
+        final pending = write('device-a');
+        final pendingOutcome = pending.then<String>(
+          (_) => 'completed',
+          onError: (_) => 'failed',
+        );
+        await pumpEventQueue();
+        expect(
+          mock.startedWrites,
+          isEmpty,
+          reason: 'an unconfirmed link must not dispatch new work',
+        );
+
+        probe.complete(BleConnectionState.disconnected);
+        await pumpEventQueue();
+        expect(await pendingOutcome, 'failed');
+        expect(mock.startedWrites, isEmpty);
+      },
+    );
+
+    test('a superseded probe cannot settle the queue', () async {
+      final first = Completer<BleConnectionState>();
+      mock.connectionStateBlocker = first;
+      mock.updateConnection('device-a', false);
+      await pumpEventQueue();
+
+      final second = Completer<BleConnectionState>();
+      mock.connectionStateBlocker = second;
+      mock.updateConnection('device-a', false);
+      await pumpEventQueue();
+
+      // The older probe resolves as connected first: the newest hold still owns
+      // the queue, so nothing may dispatch yet.
+      first.complete(BleConnectionState.connected);
+      await pumpEventQueue();
+      final pending = write('device-a');
+      final pendingOutcome = pending.then<String>(
+        (_) => 'completed',
+        onError: (_) => 'failed',
+      );
+      await pumpEventQueue();
+      expect(
+        mock.startedWrites,
+        isEmpty,
+        reason: 'a superseded probe must not release the hold',
+      );
+
+      second.complete(BleConnectionState.connected);
+      await pumpEventQueue();
+      expect(await pendingOutcome, 'completed');
+      expect(mock.startedWrites, ['device-a']);
+    });
+
+    test(
       'queued work resumes when a slow link probe proves the link is alive',
       () async {
         final writeBlocker = Completer<void>();
