@@ -5,6 +5,7 @@
 * Android: close central GATT resources and unregister the host channel when the Flutter engine detaches.
 * Darwin: normalize device IDs before tracking native operations so CoreBluetooth callbacks complete across UUID case differences.
 * Darwin: complete writes without response when CoreBluetooth accepts them and fail buffered writes on disconnect.
+* Confirm the link state before a disconnect drains a device's command queue: the queue is preserved only when the platform authoritatively reports `connected`; a `connecting` link (a reconnect in progress) does not keep the previous link's queued work alive and its pending commands are cleared, and commands held during a `connected` confirmation resume only after the active command completes.
 
 ## 2.2.6
 

@@ -14,6 +14,7 @@ class Queue {
   final Map<int, _OperationToken> _unresolvedTokens = {};
   int _lastProcessId = 0;
   _QueueState _state = _QueueState.running;
+  bool _paused = false;
   final List<_QueuedFuture> _nextCycle = [];
   Function(int)? onRemainingItemsUpdate;
 
@@ -92,10 +93,27 @@ class Queue {
     _nextCycle.clear();
   }
 
+  /// Stop dispatching pending items without deciding their outcome.
+  ///
+  /// Used when a disconnect still has to be confirmed against the platform:
+  /// holding the queue keeps the next item from starting on a link that may
+  /// already be gone. [resume] restores dispatch, [dispose] cancels the
+  /// pending items.
+  void pause() => _paused = true;
+
+  /// Resume dispatch of pending items.
+  void resume() {
+    if (!_paused) return;
+    _paused = false;
+    _updateRemainingItems();
+    if (_state == _QueueState.running) _queueUpNext();
+  }
+
   void _queueUpNext() {
+    if (_paused) return;
     if (_nextCycle.isNotEmpty &&
         _state == _QueueState.running &&
-        _activeItems.length <= 1) {
+        _activeItems.isEmpty) {
       final processId = _lastProcessId;
       _activeItems.add(processId);
       final item = _nextCycle.first;

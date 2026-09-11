@@ -16,9 +16,22 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   final List<Completer<void>> writeStartMarkers = [];
   final List<({String deviceId, String characteristic})> completedWrites = [];
 
+  /// Authoritative link state. Absent entries report
+  /// [BleConnectionState.connected], so a test states only the disconnect it
+  /// needs.
+  final Map<String, BleConnectionState> connectionStates = {};
+
+  /// Holds the authoritative link probe open when set.
+  Completer<BleConnectionState>? connectionStateBlocker;
+
   @override
-  Future<BleConnectionState> getConnectionState(String deviceId) async =>
-      BleConnectionState.connected;
+  Future<BleConnectionState> getConnectionState(String deviceId) {
+    final blocker = connectionStateBlocker;
+    if (blocker != null) return blocker.future;
+    return Future.value(
+      connectionStates[deviceId.toLowerCase()] ?? BleConnectionState.connected,
+    );
+  }
 
   @override
   Future<void> connect(
@@ -33,6 +46,13 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   @override
   Future<void> disconnect(String deviceId) async {
     disconnectCalls.add(deviceId);
+    disconnectDevice(deviceId);
+  }
+
+  /// Records the authoritative link state for [deviceId] as disconnected and
+  /// publishes the connection update.
+  void disconnectDevice(String deviceId) {
+    connectionStates[deviceId.toLowerCase()] = BleConnectionState.disconnected;
     updateConnection(deviceId, false);
   }
 
@@ -100,7 +120,7 @@ void main() {
       final pending = write('device-a');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       // Pending command fails right away with deviceDisconnected — it must
       // NOT wait out its own 5s timeout.
@@ -126,7 +146,7 @@ void main() {
       final pending = write('DEVICE-A');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       await expectLater(
         pending.timeout(const Duration(milliseconds: 500)),
@@ -141,6 +161,244 @@ void main() {
       await expectLater(inFlight, throwsA(isA<TimeoutException>()));
     });
 
+    test(
+      'stale disconnect update does not cancel queued work on a live link',
+      () async {
+        final blocker = Completer<void>();
+        mock.writeBlockers['device-a'] = blocker;
+
+        // First write occupies the queue head, second stays pending.
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+        var pendingSettled = false;
+        final pendingOutcome = pending
+            .then<String>((_) => 'completed', onError: (_) => 'failed')
+            .whenComplete(() => pendingSettled = true);
+
+        await pumpEventQueue();
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.running,
+        );
+
+        // Late disconnect for a link the platform still reports connected.
+        mock.connectionStates['device-a'] = BleConnectionState.connected;
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        expect(
+          pendingSettled,
+          isFalse,
+          reason: 'a stale update must not settle the current queue',
+        );
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.running,
+          reason: 'a stale update must not dispose a live queue',
+        );
+        expect(
+          mock.startedWrites,
+          ['device-a'],
+          reason:
+              'confirming a live link must not dispatch the next command while '
+              'one is still running',
+        );
+
+        blocker.complete();
+        await inFlight;
+        expect(await pendingOutcome, 'completed');
+        expect(mock.completedWrites, hasLength(2));
+      },
+    );
+
+    test(
+      'genuine disconnect still cancels queued work when the link probe is slow',
+      () async {
+        final writeBlocker = Completer<void>();
+        mock.writeBlockers['device-a'] = writeBlocker;
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        // First write occupies the queue head, second stays pending.
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+        final pendingOutcome = pending.then<String>(
+          (_) => 'completed',
+          onError: (_) => 'failed',
+        );
+
+        await pumpEventQueue();
+        expect(mock.startedWrites, ['device-a']);
+
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        // The in-flight write finishes while the link probe is still pending.
+        writeBlocker.complete();
+        await inFlight;
+        await pumpEventQueue();
+        expect(
+          mock.startedWrites,
+          ['device-a'],
+          reason:
+              'an unconfirmed disconnect must hold the queue instead of '
+              'letting the next command dispatch',
+        );
+
+        probe.complete(BleConnectionState.disconnected);
+        await pumpEventQueue();
+        expect(await pendingOutcome, 'failed');
+        expect(mock.startedWrites, ['device-a']);
+      },
+    );
+
+    test(
+      'a command issued while the disconnect is unconfirmed does not dispatch',
+      () async {
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        // No queue existed when the event arrived: the queue created now must
+        // still start held.
+        final pending = write('device-a');
+        final pendingOutcome = pending.then<String>(
+          (_) => 'completed',
+          onError: (_) => 'failed',
+        );
+        await pumpEventQueue();
+        expect(
+          mock.startedWrites,
+          isEmpty,
+          reason: 'an unconfirmed link must not dispatch new work',
+        );
+
+        probe.complete(BleConnectionState.disconnected);
+        await pumpEventQueue();
+        expect(await pendingOutcome, 'failed');
+        expect(mock.startedWrites, isEmpty);
+      },
+    );
+
+    test('a superseded probe cannot settle the queue', () async {
+      final first = Completer<BleConnectionState>();
+      mock.connectionStateBlocker = first;
+      mock.updateConnection('device-a', false);
+      await pumpEventQueue();
+
+      final second = Completer<BleConnectionState>();
+      mock.connectionStateBlocker = second;
+      mock.updateConnection('device-a', false);
+      await pumpEventQueue();
+
+      // The older probe resolves as connected first: the newest hold still owns
+      // the queue, so nothing may dispatch yet.
+      first.complete(BleConnectionState.connected);
+      await pumpEventQueue();
+      final pending = write('device-a');
+      final pendingOutcome = pending.then<String>(
+        (_) => 'completed',
+        onError: (_) => 'failed',
+      );
+      await pumpEventQueue();
+      expect(
+        mock.startedWrites,
+        isEmpty,
+        reason: 'a superseded probe must not release the hold',
+      );
+
+      second.complete(BleConnectionState.connected);
+      await pumpEventQueue();
+      expect(await pendingOutcome, 'completed');
+      expect(mock.startedWrites, ['device-a']);
+    });
+
+    test(
+      'queued work resumes when a slow link probe proves the link is alive',
+      () async {
+        final writeBlocker = Completer<void>();
+        mock.writeBlockers['device-a'] = writeBlocker;
+        final probe = Completer<BleConnectionState>();
+        mock.connectionStateBlocker = probe;
+
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+
+        await pumpEventQueue();
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+
+        writeBlocker.complete();
+        await inFlight;
+        await pumpEventQueue();
+        expect(
+          mock.completedWrites.where((entry) => entry.deviceId == 'device-a'),
+          hasLength(1),
+        );
+
+        probe.complete(BleConnectionState.connected);
+        await expectLater(pending, completes);
+        expect(
+          mock.completedWrites.where((entry) => entry.deviceId == 'device-a'),
+          hasLength(2),
+        );
+      },
+    );
+
+    test(
+      'a reconnect in progress does not dispatch queued work from the previous link',
+      () async {
+        // First write occupies the queue head (hangs); the second is pending.
+        final blocker = Completer<void>();
+        mock.writeBlockers['device-a'] = blocker;
+
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+
+        await pumpEventQueue();
+        expect(mock.startedWrites, ['device-a']);
+
+        // The expectation is attached before the update fires: the drain settles
+        // the pending command while the queue is pumped below.
+        final pendingOutcome = expectLater(
+          pending.timeout(const Duration(milliseconds: 500)),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.deviceDisconnected,
+            ),
+          ),
+        );
+
+        // A reconnect is in progress: the platform reports `connecting`.
+        mock.connectionStates['device-a'] = BleConnectionState.connecting;
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+        await pendingOutcome;
+
+        // Connecting does not preserve the previous link's queued work, and no
+        // second GATT command may start merely because the replacement link is
+        // connecting.
+        expect(mock.startedWrites, ['device-a']);
+
+        // The queue was cleared rather than left paused.
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.notFound,
+        );
+
+        blocker.complete();
+        await inFlight;
+
+        // The cleared queue must not wedge later work.
+        await write('device-a');
+        expect(mock.startedWrites, ['device-a', 'device-a']);
+      },
+    );
+
     test('drain only affects the disconnected device', () async {
       mock.hangingWrites.add('device-a');
 
@@ -152,7 +410,7 @@ void main() {
       final pendingB = write('device-b');
 
       await pumpEventQueue();
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
 
       expect(await pendingB.then((_) => 'completed'), 'completed');
       expect(
@@ -238,7 +496,7 @@ void main() {
       await write('device-b');
       expect(mock.startedWrites, ['device-a', 'device-b']);
 
-      mock.updateConnection('device-a', false);
+      mock.disconnectDevice('device-a');
       await pumpEventQueue();
       mock.writeBlockers.remove('device-a');
       await write('device-a');

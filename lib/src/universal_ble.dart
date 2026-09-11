@@ -35,11 +35,32 @@ class UniversalBle {
   /// queue from head-of-line-blocking recovery. Only queues keyed by
   /// [deviceId] are affected (i.e. [QueueType.perDevice]); the global queue
   /// and custom [queueId] queues are left untouched.
+  ///
+  /// A raw `isConnected == false` update is confirmed against the platform
+  /// link state first. Only an authoritative `connected` state proves the
+  /// update stale, and only then is the held queue released: a late update for
+  /// a link that is still live must not fail the current connection's queued
+  /// commands. `connecting` means a reconnect is in progress and does not
+  /// preserve the old queued work, because the queue is keyed by device ID
+  /// rather than by physical connection generation. An inconclusive
+  /// confirmation (error or timeout) clears the queue too. The device queue is
+  /// held while the confirmation is in flight, so a genuine disconnect still
+  /// cancels pending commands before the next one can dispatch.
   static UniversalBlePlatform _wireQueueDrain(UniversalBlePlatform platform) {
     _queueDrainSubscription?.cancel();
     _queueDrainSubscription = platform.bleConnectionUpdateStreamController.stream
         .where((e) => !e.isConnected)
-        .listen((e) {
+        .listen((e) async {
+      // Hold the device's queue synchronously so nothing else dispatches while
+      // the link state is still unknown, then settle it exactly once. Only the
+      // newest hold may settle, so a superseded probe cannot clear or resume a
+      // queue that a newer confirmation still owns.
+      final hold = _bleCommandQueue.holdQueue(e.deviceId);
+      if (await _linkStillConnected(platform, e.deviceId)) {
+        _bleCommandQueue.releaseQueueHold(e.deviceId, hold);
+        return;
+      }
+      if (!_bleCommandQueue.ownsQueueHold(e.deviceId, hold)) return;
       _bleCommandQueue.clearQueue(
         e.deviceId,
         error: UniversalBleException(
@@ -49,6 +70,29 @@ class UniversalBle {
       );
     });
     return platform;
+  }
+
+  /// Whether [platform] authoritatively reports a live link for [deviceId].
+  ///
+  /// Reports `true` only for [BleConnectionState.connected]. `connecting` is
+  /// not proof of a live link: a reconnect in progress must not make queued
+  /// work from the previous link runnable. The platform method is called
+  /// directly so the confirmation never enqueues work on the queue it protects.
+  /// Any other state, error or timeout reports `false`, so a genuine disconnect
+  /// keeps failing pending commands immediately instead of waiting out each
+  /// command's own timeout.
+  static Future<bool> _linkStillConnected(
+    UniversalBlePlatform platform,
+    String deviceId,
+  ) async {
+    try {
+      final state = await platform
+          .getConnectionState(deviceId)
+          .timeout(const Duration(seconds: 2));
+      return state == BleConnectionState.connected;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Set global timeout for all commands.
