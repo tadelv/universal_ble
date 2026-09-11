@@ -37,11 +37,15 @@ class UniversalBle {
   /// and custom [queueId] queues are left untouched.
   ///
   /// A raw `isConnected == false` update is confirmed against the platform
-  /// link state first: a late update for a link that a newer connection
-  /// attempt already re-established must not fail the current connection's
-  /// queued commands. The device queue is held while that confirmation is in
-  /// flight, so a genuine disconnect still cancels pending commands before the
-  /// next one can dispatch.
+  /// link state first. Only an authoritative `connected` state proves the
+  /// update stale, and only then is the held queue released: a late update for
+  /// a link that is still live must not fail the current connection's queued
+  /// commands. `connecting` means a reconnect is in progress and does not
+  /// preserve the old queued work, because the queue is keyed by device ID
+  /// rather than by physical connection generation. An inconclusive
+  /// confirmation (error or timeout) clears the queue too. The device queue is
+  /// held while the confirmation is in flight, so a genuine disconnect still
+  /// cancels pending commands before the next one can dispatch.
   static UniversalBlePlatform _wireQueueDrain(UniversalBlePlatform platform) {
     _queueDrainSubscription?.cancel();
     _queueDrainSubscription = platform.bleConnectionUpdateStreamController.stream
@@ -68,12 +72,15 @@ class UniversalBle {
     return platform;
   }
 
-  /// Whether [platform] still reports a live link for [deviceId].
+  /// Whether [platform] authoritatively reports a live link for [deviceId].
   ///
-  /// The platform method is called directly so the confirmation never enqueues
-  /// work on the queue it protects. An inconclusive confirmation reports
-  /// `false`, so a genuine disconnect keeps failing pending commands
-  /// immediately instead of waiting out each command's own timeout.
+  /// Reports `true` only for [BleConnectionState.connected]. `connecting` is
+  /// not proof of a live link: a reconnect in progress must not make queued
+  /// work from the previous link runnable. The platform method is called
+  /// directly so the confirmation never enqueues work on the queue it protects.
+  /// Any other state, error or timeout reports `false`, so a genuine disconnect
+  /// keeps failing pending commands immediately instead of waiting out each
+  /// command's own timeout.
   static Future<bool> _linkStillConnected(
     UniversalBlePlatform platform,
     String deviceId,
@@ -82,8 +89,7 @@ class UniversalBle {
       final state = await platform
           .getConnectionState(deviceId)
           .timeout(const Duration(seconds: 2));
-      return state == BleConnectionState.connected ||
-          state == BleConnectionState.connecting;
+      return state == BleConnectionState.connected;
     } catch (_) {
       return false;
     }

@@ -347,6 +347,58 @@ void main() {
       },
     );
 
+    test(
+      'a reconnect in progress does not dispatch queued work from the previous link',
+      () async {
+        // First write occupies the queue head (hangs); the second is pending.
+        final blocker = Completer<void>();
+        mock.writeBlockers['device-a'] = blocker;
+
+        final inFlight = write('device-a');
+        final pending = write('device-a');
+
+        await pumpEventQueue();
+        expect(mock.startedWrites, ['device-a']);
+
+        // The expectation is attached before the update fires: the drain settles
+        // the pending command while the queue is pumped below.
+        final pendingOutcome = expectLater(
+          pending.timeout(const Duration(milliseconds: 500)),
+          throwsA(
+            isA<UniversalBleException>().having(
+              (e) => e.code,
+              'code',
+              UniversalBleErrorCode.deviceDisconnected,
+            ),
+          ),
+        );
+
+        // A reconnect is in progress: the platform reports `connecting`.
+        mock.connectionStates['device-a'] = BleConnectionState.connecting;
+        mock.updateConnection('device-a', false);
+        await pumpEventQueue();
+        await pendingOutcome;
+
+        // Connecting does not preserve the previous link's queued work, and no
+        // second GATT command may start merely because the replacement link is
+        // connecting.
+        expect(mock.startedWrites, ['device-a']);
+
+        // The queue was cleared rather than left paused.
+        expect(
+          UniversalBle.getQueueDiagnostics('device-a').state,
+          QueueDiagnosticsState.notFound,
+        );
+
+        blocker.complete();
+        await inFlight;
+
+        // The cleared queue must not wedge later work.
+        await write('device-a');
+        expect(mock.startedWrites, ['device-a', 'device-a']);
+      },
+    );
+
     test('drain only affects the disconnected device', () async {
       mock.hangingWrites.add('device-a');
 
