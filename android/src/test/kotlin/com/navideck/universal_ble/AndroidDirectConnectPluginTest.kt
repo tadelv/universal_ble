@@ -152,6 +152,82 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun establishedDisconnectWithoutCallbackForceClosesExactGatt() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        assertEquals(0, f.events.count { it == "close:$scale" })
+        f.advance(1_999)
+        assertEquals(0, f.events.count { it == "close:$scale" })
+        f.advance(1)
+
+        assertEquals(1, f.events.count { it == "close:$scale" })
+        assertFalse(f.ownedGatts().containsKey(original))
+        assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
+    fun nativeDisconnectCallbackCancelsForcedCloseFallback() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        f.disconnected(scale, 0)
+        f.pump()
+
+        assertEquals(1, f.events.count { it == "close:$scale" })
+        f.advance(4_000)
+        assertEquals(1, f.events.count { it == "close:$scale" })
+    }
+
+    @Test
+    fun forcedCloseFallbackCannotCloseSameAddressReplacement() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        val replacement = f.installReplacement(scale)
+        f.advance(2_000)
+
+        verify(original).close()
+        verify(replacement, never()).close()
+        assertSame(replacement, scale.findGatt())
+    }
+
+    @Test
+    fun forcedCloseFailureUsesExistingRecoveryBarrier() = withFixture { f ->
+        f.closeFailuresRemaining[scale] = 1
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(4_000)
+
+        assertTrue(f.ownedGatts().containsKey(original))
+        assertSame(original, scale.findGatt())
+        assertFailsWith<FlutterError> { f.connect(machine) }
+
+        f.advance(250)
+        assertFalse(f.ownedGatts().containsKey(original))
+        assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
     fun adapterOffCancelsQueuedAndAlreadyPostedAdmission() = withFixture { f ->
         f.connect(scale)
         f.connect(machine)
@@ -326,6 +402,16 @@ internal class AndroidDirectConnectPluginTest {
             }
             states[id] = newState
             plugin.onConnectionStateChange(gatt, status, newState)
+        }
+
+        fun installReplacement(id: String): BluetoothGatt {
+            val key = id.connectionKey()
+            val device = mock(BluetoothDevice::class.java)
+            val replacement = mock(BluetoothGatt::class.java)
+            `when`(device.address).thenReturn(key)
+            `when`(replacement.device).thenReturn(device)
+            replacement.saveCacheIfNeeded()
+            return replacement
         }
 
         fun advance(millis: Long) {

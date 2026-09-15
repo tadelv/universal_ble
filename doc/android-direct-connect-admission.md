@@ -203,6 +203,21 @@ loss, 133 recovery, cancellation during cooldown, and adapter off/on. Record
 attempt counts, failure status, native client lifetime, notification gaps and
 recovery duration. Require the healthy peer to remain connected and usable.
 
+### Established-link disconnect callback fallback
+
+An explicit disconnect of an already-established direct link first preserves the normal Android
+callback path. If Android still reports the exact owned GATT as connected after `disconnect()`, the
+plugin arms a 2-second callback grace timer. A real `STATE_DISCONNECTED` callback cancels that timer.
+If no callback arrives, the timer force-closes only the captured GATT object, publishes a bounded
+disconnect result, and routes any throwing `close()` through `AndroidGattCloseRecovery`.
+
+The timer is identity-fenced. If the original owner was already retired it is a no-op. If a same-
+address replacement somehow became current, the fallback may close the exact stale old object but
+never disconnects or evicts the replacement; `removeCacheIfCurrent()` remains identity-checked.
+Pending fallback tasks are cancelled at adapter/plugin epoch reset. While an exact disconnect
+fallback is outstanding, new native establishments are recovery-blocked, but idempotent access to a
+different already-connected healthy peer remains allowed.
+
 A caller can exhaust its timeout while waiting for another unavailable device;
 this patch does not extend that deadline or count a deferred attempt as success.
 If initial timeouts continue despite serialized connects, investigate
