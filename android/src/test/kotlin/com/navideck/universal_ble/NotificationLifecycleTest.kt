@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.os.Handler
+import android.os.SystemClock
 import java.util.IdentityHashMap
 import java.util.UUID
 import kotlin.test.Test
@@ -17,6 +18,7 @@ import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.inOrder
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockStatic
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
@@ -177,11 +179,14 @@ internal class NotificationLifecycleTest {
         current.gatt.saveCacheIfNeeded()
 
         try {
-            old.plugin.onConnectionStateChange(
-                old.gatt,
-                BluetoothGatt.GATT_SUCCESS,
-                BluetoothGatt.STATE_DISCONNECTED,
-            )
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                old.plugin.onConnectionStateChange(
+                    old.gatt,
+                    BluetoothGatt.GATT_SUCCESS,
+                    BluetoothGatt.STATE_DISCONNECTED,
+                )
+            }
 
             assertSame(current.gatt, deviceId.findGatt())
             verify(old.gatt).close()
