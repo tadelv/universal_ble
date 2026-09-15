@@ -214,9 +214,12 @@ disconnect result, and routes any throwing `close()` through `AndroidGattCloseRe
 The timer is identity-fenced. If the original owner was already retired it is a no-op. If a same-
 address replacement somehow became current, the fallback may close the exact stale old object but
 never disconnects or evicts the replacement; `removeCacheIfCurrent()` remains identity-checked.
-Pending fallback tasks are cancelled at adapter/plugin epoch reset. While an exact disconnect
-fallback is outstanding, new native establishments are recovery-blocked, but idempotent access to a
-different already-connected healthy peer remains allowed.
+The teardown fence is installed as soon as explicit `disconnect()` is requested, including while
+the existing 2-second connect/disconnect spacing is still being honored; this closes the race where
+a peer connect could otherwise enter before native disconnect starts. Pending fallback tasks are
+cancelled at adapter/plugin epoch reset. New native establishments remain recovery-blocked while the
+exact teardown is unresolved, but idempotent access to a different already-connected healthy peer
+remains allowed.
 
 A caller can exhaust its timeout while waiting for another unavailable device;
 this patch does not extend that deadline or count a deferred attempt as success.

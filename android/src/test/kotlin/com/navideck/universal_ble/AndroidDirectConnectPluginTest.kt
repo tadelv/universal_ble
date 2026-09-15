@@ -216,7 +216,8 @@ internal class AndroidDirectConnectPluginTest {
         val original = f.gatts.getValue(scale)
 
         f.plugin.disconnect(scale)
-        f.advance(4_000)
+        f.advance(2_000)
+        f.advance(2_000)
 
         assertTrue(f.ownedGatts().containsKey(original))
         assertSame(original, scale.findGatt())
@@ -225,6 +226,39 @@ internal class AndroidDirectConnectPluginTest {
         f.advance(250)
         assertFalse(f.ownedGatts().containsKey(original))
         assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
+    fun disconnectRequestFencesPeerConnectBeforeNativeDisconnectRuns() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+
+        f.plugin.disconnect(scale)
+
+        assertFailsWith<FlutterError> { f.connect(machine) }
+        assertEquals(listOf(scale), f.created)
+    }
+
+    @Test
+    fun healthyConnectedPeerRemainsIdempotentWhileOtherGattIsTearingDown() = withFixture { f ->
+        f.connect(machine)
+        f.pump()
+        f.connected(machine)
+        f.pump()
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+
+        f.plugin.disconnect(scale)
+        f.connect(machine)
+        f.pump()
+
+        assertEquals(listOf(machine, scale), f.created)
+        verify(f.gatts.getValue(machine), never()).disconnect()
+        verify(f.gatts.getValue(machine), never()).close()
     }
 
     @Test

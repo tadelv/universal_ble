@@ -422,7 +422,10 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         }
     }
 
-    private fun scheduleDisconnectFallback(gatt: BluetoothGatt) {
+    private fun scheduleDisconnectFallback(
+        gatt: BluetoothGatt,
+        delayMs: Long = disconnectCallbackGraceMs,
+    ) {
         if (!ownedGatts.containsKey(gatt) || pendingDisconnectFallbacks.containsKey(gatt)) return
         val deviceId = gatt.device.address
         lateinit var fallback: Runnable
@@ -455,7 +458,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             )
         }
         pendingDisconnectFallbacks[gatt] = fallback
-        val posted = mainThreadHandler?.postDelayed(fallback, disconnectCallbackGraceMs) == true
+        val posted = mainThreadHandler?.postDelayed(fallback, delayMs) == true
         if (posted) return
 
         pendingDisconnectFallbacks.remove(gatt)
@@ -466,6 +469,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 "client=${System.identityHashCode(gatt)}; forcing exact-owner cleanup"
         )
         if (stillCurrent) {
+            disconnectGattBestEffort(gatt, "disconnect-fallback-schedule-failed")
             cleanUpConnection(gatt)
             connectTimestamps.remove(deviceId.connectionKey())
         }
@@ -614,11 +618,19 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         }
         val elapsed = SystemClock.elapsedRealtime() - (connectTimestamps[connectionKey] ?: 0L)
         val remaining = minConnectDisconnectGapMs - elapsed
+        // Fence new native establishments immediately. The callback fallback itself is delayed
+        // until after both the existing connect/disconnect spacing and its callback grace period.
+        scheduleDisconnectFallback(
+            gatt,
+            maxOf(remaining, 0L) + disconnectCallbackGraceMs,
+        )
         if (remaining > 0) {
             UniversalBleLogger.logDebug(
                 "Delaying disconnect of $deviceId by ${remaining}ms (connect-disconnect gap)"
             )
-            mainThreadHandler?.postDelayed({ cleanConnection(gatt) }, remaining)
+            mainThreadHandler?.postDelayed({
+                if (ownedGatts.containsKey(gatt)) cleanConnection(gatt)
+            }, remaining)
         } else {
             cleanConnection(gatt)
         }
