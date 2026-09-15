@@ -85,6 +85,8 @@ internal class AndroidDirectConnectPluginTest {
         assertTrue(f.created.isEmpty())
         f.connect(machine)
         f.pump()
+        assertTrue(f.created.isEmpty(), "Existing reconnect cooldown still applies")
+        f.advance(2_000)
         assertEquals(listOf(machine), f.created)
     }
 
