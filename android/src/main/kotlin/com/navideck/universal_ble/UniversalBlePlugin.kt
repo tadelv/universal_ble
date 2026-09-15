@@ -80,6 +80,13 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         post = { task -> check(requireNotNull(mainThreadHandler).post { task() }) },
         onStartFailure = ::onDirectConnectStartFailure,
     )
+    private val gattCloseRecovery = AndroidGattCloseRecovery<BluetoothGatt>(
+        postDelayed = { delayMs, task ->
+            mainThreadHandler?.postDelayed({ task() }, delayMs) == true
+        },
+        onBlocked = ::onGattCloseBlocked,
+        onRecovered = ::onGattCloseRecovered,
+    )
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -282,6 +289,12 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         platformConfig: ConnectionPlatformConfig?,
     ) {
         val connectionKey = deviceId.connectionKey()
+        if (gattCloseRecovery.hasBlockedOwners) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_FAILED,
+                "RECOVERY_BLOCKED: unresolved native GATT teardown"
+            )
+        }
         if (directConnectQueue.contains(connectionKey)) {
             throw createFlutterError(
                 UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
@@ -334,7 +347,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             directConnectQueue.enqueue(connectionKey) { attempt ->
                 UniversalBleLogger.logInfo(
                     "Admitting direct connect of $deviceId generation=${attempt.generation} " +
-                        "queued=${directConnectQueue.pendingCount} ownedGatts=${ownedGatts.size}"
+                        "epoch=${attempt.epoch} queued=${directConnectQueue.pendingCount} " +
+                        "ownedGatts=${ownedGatts.size} t=${SystemClock.elapsedRealtime()}"
                 )
                 connectWhenReady(deviceId, false, attempt)
             }
@@ -354,6 +368,41 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         notifyDisconnected(
             attempt.deviceId,
             "CONNECT_START_FAILED: ${error.message ?: error.javaClass.simpleName}"
+        )
+    }
+
+    private fun onGattCloseBlocked(
+        gatt: BluetoothGatt,
+        reason: String,
+        attempt: Int,
+        error: Exception,
+    ) {
+        val deviceId = gatt.device.address
+        val waiting = directConnectQueue.cancelPending()
+        UniversalBleLogger.logError(
+            "GATT close recovery blocked for $deviceId client=${System.identityHashCode(gatt)} " +
+                "reason=$reason closeAttempt=$attempt generation=${directConnectQueue.activeGeneration} " +
+                "epoch=${directConnectQueue.activeEpoch} state=${directConnectQueue.activeState} " +
+                "queuedCancelled=${waiting.size} ownedGatts=${ownedGatts.size} " +
+                "t=${SystemClock.elapsedRealtime()}: $error"
+        )
+        val recoveryError = "RECOVERY_BLOCKED: GATT_CLOSE_FAILED for $deviceId"
+        waiting.forEach { notifyDisconnected(it.deviceId, recoveryError) }
+    }
+
+    private fun onGattCloseRecovered(
+        gatt: BluetoothGatt,
+        reason: String,
+        attempts: Int,
+    ) {
+        val deviceId = gatt.device.address
+        gatt.removeCacheIfCurrent()
+        ownedGatts.remove(gatt)
+        directConnectQueue.complete(gatt)
+        UniversalBleLogger.logInfo(
+            "Closed GATT for $deviceId client=${System.identityHashCode(gatt)} " +
+                "reason=$reason closeAttempts=$attempts ownedGatts=${ownedGatts.size} " +
+                "t=${SystemClock.elapsedRealtime()}"
         )
     }
 
@@ -466,7 +515,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         if (attempt != null) directConnectQueue.bind(attempt, gatt)
         UniversalBleLogger.logDebug(
             "Created GATT for $deviceId client=${System.identityHashCode(gatt)} " +
-                "generation=${attempt?.generation} ownedGatts=${ownedGatts.size}"
+                "generation=${attempt?.generation} epoch=${attempt?.epoch} " +
+                "ownedGatts=${ownedGatts.size} t=${SystemClock.elapsedRealtime()}"
         )
     }
 
@@ -1515,37 +1565,50 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         localNotificationStates.remove(gatt)
     }
 
+    private fun disconnectGattBestEffort(gatt: BluetoothGatt, context: String) {
+        try {
+            gatt.disconnect()
+        } catch (e: Exception) {
+            UniversalBleLogger.logError(
+                "Failed to disconnect GATT for ${gatt.device.address} context=$context: $e"
+            )
+        }
+    }
+
     private fun cleanConnection(gatt: BluetoothGatt) {
         val deviceId = gatt.device.address
         if (!gatt.isCurrentGatt()) {
             cleanUpConnection(gatt)
-            gatt.disconnect()
-            closeGatt(gatt)
+            disconnectGattBestEffort(gatt, "stale-cleanup")
+            closeGatt(gatt, "stale-cleanup")
             return
         }
-        gatt.disconnect()
+        disconnectGattBestEffort(gatt, "disconnect")
         cleanUpConnection(gatt)
         // A connect attempt that never reached STATE_CONNECTED may get no
         // onConnectionStateChange callback after disconnect(); close and
         // report here or the GATT client leaks (Android caps them at 32,
         // and exhaustion surfaces as GATT 133 elsewhere).
-        val state = bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
+        val state = try {
+            bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
+        } catch (e: Exception) {
+            UniversalBleLogger.logError("Connection-state probe failed during cleanup for $deviceId: $e")
+            null
+        }
         if (state != BluetoothProfile.STATE_CONNECTED || directConnectQueue.isCancelled(gatt)) {
             connectTimestamps.remove(deviceId.connectionKey())
-            gatt.removeCacheIfCurrent()
-            closeGatt(gatt)
-            notifyDisconnected(deviceId, null)
+            val closed = closeGatt(gatt, "disconnect-cleanup")
+            notifyDisconnected(
+                deviceId,
+                if (closed) null else "RECOVERY_BLOCKED: GATT_CLOSE_FAILED"
+            )
         }
     }
 
-    private fun closeGatt(gatt: BluetoothGatt) {
-        gatt.close()
-        ownedGatts.remove(gatt)
-        directConnectQueue.complete(gatt)
-        UniversalBleLogger.logDebug(
-            "Closed GATT for ${gatt.device.address} client=${System.identityHashCode(gatt)} " +
-                "ownedGatts=${ownedGatts.size}"
-        )
+    private fun closeGatt(gatt: BluetoothGatt, reason: String): Boolean {
+        if (!ownedGatts.containsKey(gatt)) return true
+        return gattCloseRecovery.close(gatt, reason) { gatt.close() } ==
+            AndroidGattCloseRecovery.Result.CLOSED
     }
 
     private fun notifyDisconnected(deviceId: String, error: String?) {
@@ -1576,6 +1639,9 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         gatts: List<BluetoothGatt>,
     ) {
         val queuedDeviceIds = directConnectQueue.clear()
+        // Adapter-off / engine-detach is a whole native epoch boundary. Posted close retries from
+        // the old epoch must not mutate the next one even if Android runs them late.
+        gattCloseRecovery.clearEpoch()
         disposeTemporaryDiscoveryGatts()
         val pendingDeviceIds = pendingConnects.keys.toList() + queuedDeviceIds
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
@@ -1584,11 +1650,19 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             val deviceId = gatt.device.address
             cleanUpConnection(gatt)
             connectTimestamps.remove(deviceId.connectionKey())
-            gatt.removeCacheIfCurrent()
+            disconnectGattBestEffort(gatt, "epoch-cleanup")
             try {
-                closeGatt(gatt)
+                gatt.close()
             } catch (e: Exception) {
-                UniversalBleLogger.logError("Failed to close gatt for $deviceId: $e")
+                UniversalBleLogger.logError(
+                    "Failed to close GATT at epoch boundary for $deviceId " +
+                        "client=${System.identityHashCode(gatt)}: $e"
+                )
+            } finally {
+                // The adapter/plugin epoch is gone; no later request in this epoch may adopt this
+                // client even when Android's close call itself threw.
+                gatt.removeCacheIfCurrent()
+                ownedGatts.remove(gatt)
             }
         }
         if (notificationError != null) {
@@ -1708,30 +1782,45 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     ) {
         completeGattCallback {
             UniversalBleLogger.logDebug(
-                "onConnectionStateChange-> Status: $status ${status.parseHciErrorCode()}, NewState: $newState"
+                "onConnectionStateChange-> Status: $status ${status.parseHciErrorCode()}, " +
+                    "NewState: $newState client=${System.identityHashCode(gatt)} " +
+                    "generation=${if (directConnectQueue.owns(gatt)) directConnectQueue.activeGeneration else null} " +
+                    "epoch=${if (directConnectQueue.owns(gatt)) directConnectQueue.activeEpoch else null} " +
+                    "t=${SystemClock.elapsedRealtime()}"
             )
 
             if (!gatt.isCurrentGatt()) {
                 cleanUpConnection(gatt)
-                gatt.disconnect()
-                closeGatt(gatt)
+                disconnectGattBestEffort(gatt, "stale-callback")
+                closeGatt(gatt, "stale-callback")
                 return@completeGattCallback
             }
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
+                val deviceId = gatt.device.address
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    UniversalBleLogger.logError(
+                        "Rejecting connected callback with non-success status for $deviceId " +
+                            "client=${System.identityHashCode(gatt)} status=$status"
+                    )
+                    autoConnectDevices.remove(deviceId.connectionKey())
+                    cleanUpConnection(gatt)
+                    notifyDisconnected(deviceId, status.parseHciErrorCode() ?: "GATT_STATUS_$status")
+                    disconnectGattBestEffort(gatt, "connected-error-status")
+                    closeGatt(gatt, "connected-error-status")
+                    return@completeGattCallback
+                }
                 if (directConnectQueue.isCancelled(gatt)) {
                     UniversalBleLogger.logInfo(
                         "Ignoring connected callback for cancelling direct attempt " +
-                            "${gatt.device.address} client=${System.identityHashCode(gatt)}"
+                            "$deviceId client=${System.identityHashCode(gatt)}"
                     )
                     return@completeGattCallback
                 }
-                val connectionKey = gatt.device.address.connectionKey()
+                val connectionKey = deviceId.connectionKey()
                 pendingConnects.remove(connectionKey)?.let { mainThreadHandler?.removeCallbacks(it) }
                 disconnectTimestamps.remove(connectionKey)
-                callbackChannel?.onConnectionChanged(
-                    gatt.device.address, true, status.parseHciErrorCode()
-                ) {}
+                callbackChannel?.onConnectionChanged(deviceId, true, null) {}
                 directConnectQueue.complete(gatt)
                 directConnectQueue.completeExistingConnection(connectionKey)
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
@@ -1752,10 +1841,9 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             // competing connectGatt clients — itself a 133 cause.
                 if (!shouldAutoConnect) {
                 // Only close GATT resources when autoConnect is disabled
-                    gatt.removeCacheIfCurrent()
-                    gatt.disconnect()
+                    disconnectGattBestEffort(gatt, "disconnected-callback")
                     UniversalBleLogger.logDebug("Closing gatt for ${gatt.device.name}")
-                    closeGatt(gatt)
+                    closeGatt(gatt, "disconnected-callback")
                 }
             // When autoConnect is enabled, keep GATT open for Android to reconnect
             }
