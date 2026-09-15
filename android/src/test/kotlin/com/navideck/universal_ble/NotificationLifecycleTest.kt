@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.os.Handler
+import java.util.IdentityHashMap
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -169,7 +170,9 @@ internal class NotificationLifecycleTest {
         val old = fixture(save = false)
         val current = fixture(save = false)
         val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val oldOwned = old.plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
         old.plugin.setField("callbackChannel", callbackChannel)
+        oldOwned[old.gatt] = Unit
         old.gatt.saveCacheIfNeeded()
         current.gatt.saveCacheIfNeeded()
 
@@ -184,6 +187,7 @@ internal class NotificationLifecycleTest {
             verify(old.gatt).close()
             verifyNoInteractions(callbackChannel)
         } finally {
+            oldOwned.remove(old.gatt)
             current.gatt.removeCacheIfCurrent()
         }
     }
