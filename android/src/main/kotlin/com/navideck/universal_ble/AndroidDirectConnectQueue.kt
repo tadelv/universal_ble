@@ -100,6 +100,9 @@ internal class AndroidDirectConnectQueue(
     fun isActive(attempt: Attempt): Boolean =
         active === attempt && attempt.state in setOf(AttemptState.ADMITTED, AttemptState.NATIVE_PENDING)
 
+    /** True only when [nativeOwner] is the exact native client currently holding admission. */
+    fun owns(nativeOwner: Any): Boolean = active?.nativeOwner === nativeOwner
+
     fun bind(attempt: Attempt, nativeOwner: Any) {
         check(active === attempt && attempt.epoch == currentEpoch) {
             "Cannot bind a retired connection attempt"
@@ -189,6 +192,19 @@ internal class AndroidDirectConnectQueue(
             startNext()
         }
         return true
+    }
+
+    /**
+     * Cancel only requests that have not acquired the admission lane yet.
+     *
+     * Used when native teardown becomes recovery-blocked: callers waiting behind the unresolved
+     * owner must fail promptly, while the exact active native owner remains fenced in place.
+     */
+    fun cancelPending(): List<Attempt> {
+        val cancelled = pending.toList()
+        pending.clear()
+        cancelled.forEach { it.beginCancellation() }
+        return cancelled
     }
 
     /**
