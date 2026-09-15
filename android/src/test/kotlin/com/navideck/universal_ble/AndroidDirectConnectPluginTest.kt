@@ -8,10 +8,12 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.Handler
 import android.os.SystemClock
+import java.util.IdentityHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyLong
@@ -51,6 +53,21 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun connectedCallbackWithErrorStatusIsRejectedAndClosedBeforePeerStarts() = withFixture { f ->
+        f.connect(scale)
+        f.connect(machine)
+        f.pump()
+        val failedGatt = f.gatts.getValue(scale)
+
+        f.connectionChanged(scale, 133, BluetoothProfile.STATE_CONNECTED)
+        f.pump()
+
+        assertEquals(listOf("create:$scale", "close:$scale", "create:$machine"), f.events)
+        assertFalse(f.ownedGatts().containsKey(failedGatt))
+        assertFalse(failedGatt.isCurrentGatt())
+    }
+
+    @Test
     fun queuedDisconnectNeverCreatesGatt() = withFixture { f ->
         f.connect(machine)
         f.connect(scale)
@@ -74,6 +91,58 @@ internal class AndroidDirectConnectPluginTest {
         assertFailsWith<FlutterError> { f.connect(scale) }
         f.advance(2_000)
         assertEquals(listOf("create:$scale", "close:$scale", "create:$machine"), f.events)
+    }
+
+    @Test
+    fun closeFailureRetainsNativeOwnershipAndFailsQueuedPeerUntilRetrySucceeds() = withFixture { f ->
+        f.closeFailuresRemaining[scale] = 1
+        f.connect(scale)
+        f.connect(machine)
+        f.pump()
+        val scaleGatt = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+
+        assertEquals(listOf(scale), f.created)
+        assertTrue(f.ownedGatts().containsKey(scaleGatt))
+        assertSame(scaleGatt, scale.findGatt())
+        assertFailsWith<FlutterError> { f.connect(machine) }
+
+        f.advance(250)
+
+        assertFalse(f.ownedGatts().containsKey(scaleGatt))
+        assertFalse(scaleGatt.isCurrentGatt())
+        f.connect(machine)
+        f.pump()
+        assertEquals(listOf(scale, machine), f.created)
+    }
+
+    @Test
+    fun exhaustedCloseRetriesStayRecoveryBlockedUntilLaterExactOwnerCleanup() = withFixture { f ->
+        f.closeFailuresRemaining[scale] = 10
+        f.connect(scale)
+        f.pump()
+        val scaleGatt = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        f.advance(250)
+        f.advance(250)
+
+        assertTrue(f.ownedGatts().containsKey(scaleGatt))
+        assertSame(scaleGatt, scale.findGatt())
+        assertFailsWith<FlutterError> { f.connect(machine) }
+
+        f.closeFailuresRemaining[scale] = 0
+        f.disconnected(scale, 0)
+        f.pump()
+
+        assertFalse(f.ownedGatts().containsKey(scaleGatt))
+        assertFalse(scaleGatt.isCurrentGatt())
+        f.connect(machine)
+        f.pump()
+        assertEquals(listOf(scale, machine), f.created)
     }
 
     @Test
@@ -132,6 +201,19 @@ internal class AndroidDirectConnectPluginTest {
         assertEquals(listOf(machine), f.created)
     }
 
+    @Test
+    fun repeatedSuccessfulRecoveryDoesNotAccumulateOwnedGatts() = withFixture { f ->
+        repeat(25) { cycle ->
+            val id = if (cycle % 2 == 0) scale else machine
+            f.connect(id)
+            f.pump()
+            f.disconnected(id, 133)
+            f.pump()
+            assertTrue(f.ownedGatts().isEmpty(), "owned GATT leaked after cycle $cycle")
+            f.advance(2_000)
+        }
+    }
+
     private fun withFixture(test: (Fixture) -> Unit) {
         val f = Fixture()
         mockStatic(SystemClock::class.java).use { clock ->
@@ -152,6 +234,7 @@ internal class AndroidDirectConnectPluginTest {
         val events = mutableListOf<String>()
         val gatts = mutableMapOf<String, BluetoothGatt>()
         val failingStarts = mutableSetOf<String>()
+        val closeFailuresRemaining = mutableMapOf<String, Int>()
         var now = 10_000L
         var overlapDetected = false
         private val states = mutableMapOf<String, Int>()
@@ -196,6 +279,11 @@ internal class AndroidDirectConnectPluginTest {
                     val gatt = mock(BluetoothGatt::class.java)
                     `when`(gatt.device).thenReturn(device)
                     doAnswer {
+                        val remaining = closeFailuresRemaining[id] ?: 0
+                        if (remaining > 0) {
+                            closeFailuresRemaining[id] = remaining - 1
+                            throw IllegalStateException("injected close failure for $id")
+                        }
                         events.add("close:$id")
                         nativePending.remove(gatt)
                         null
@@ -213,18 +301,25 @@ internal class AndroidDirectConnectPluginTest {
 
         fun connect(id: String) = plugin.connect(id, false, null)
 
+        fun ownedGatts(): IdentityHashMap<BluetoothGatt, Unit> = plugin.field("ownedGatts")
+
         fun connected(id: String) {
-            val gatt = gatts.getValue(id)
-            nativePending.remove(gatt)
-            states[id] = BluetoothProfile.STATE_CONNECTED
-            plugin.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTED)
+            connectionChanged(id, 0, BluetoothProfile.STATE_CONNECTED)
         }
 
         fun disconnected(id: String, status: Int) {
+            connectionChanged(id, status, BluetoothProfile.STATE_DISCONNECTED)
+        }
+
+        fun connectionChanged(id: String, status: Int, newState: Int) {
             val gatt = gatts.getValue(id)
-            nativePending.remove(gatt)
-            states[id] = BluetoothProfile.STATE_DISCONNECTED
-            plugin.onConnectionStateChange(gatt, status, BluetoothProfile.STATE_DISCONNECTED)
+            if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                nativePending.remove(gatt)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                nativePending.remove(gatt)
+            }
+            states[id] = newState
+            plugin.onConnectionStateChange(gatt, status, newState)
         }
 
         fun advance(millis: Long) {
