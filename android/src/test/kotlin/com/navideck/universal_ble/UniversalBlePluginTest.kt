@@ -25,6 +25,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyList
+import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.eq
 import org.mockito.ArgumentMatchers.isNull
 import org.mockito.Mockito.doAnswer
@@ -231,6 +232,7 @@ internal class UniversalBlePluginTest {
         plugin.setField("mainThreadHandler", handler)
         plugin.setField("bluetoothManager", manager)
         plugin.setField("context", context)
+        `when`(handler.postDelayed(any(Runnable::class.java), anyLong())).thenReturn(true)
         `when`(manager.adapter).thenReturn(adapter)
         `when`(adapter.isEnabled).thenReturn(true)
         `when`(adapter.getRemoteDevice(deviceId)).thenReturn(device)
@@ -247,6 +249,7 @@ internal class UniversalBlePluginTest {
 
         try {
             assertEquals(1_000L, connectTimestamps[deviceId.connectionKey()])
+            verify(handler).postDelayed(any(Runnable::class.java), eq(3_500L))
             verify(handler).postDelayed(any(Runnable::class.java), eq(1_500L))
             verify(gatt, never()).disconnect()
         } finally {
