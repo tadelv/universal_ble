@@ -92,21 +92,31 @@ internal class UniversalBlePluginTest {
         val deviceId = "AA:BB:CC:DD:EE:FF"
         val pendingConnects = plugin.field<MutableMap<String, Runnable>>("pendingConnects")
         val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
 
         plugin.setField("mainThreadHandler", handler)
         pendingConnects[deviceId.connectionKey()] = pendingConnect
         disconnectTimestamps[deviceId.connectionKey()] = 1L
+        ownedGatts[gatt] = Unit
         `when`(gatt.device).thenReturn(device)
         `when`(device.address).thenReturn(deviceId)
         gatt.saveCacheIfNeeded()
 
         try {
-            plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                plugin.onConnectionStateChange(
+                    gatt,
+                    BluetoothGatt.GATT_SUCCESS,
+                    BluetoothGatt.STATE_CONNECTED,
+                )
+            }
 
             verify(handler).removeCallbacks(pendingConnect)
             assertFalse(pendingConnects.containsKey(deviceId.connectionKey()))
             assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
         } finally {
+            ownedGatts.remove(gatt)
             gatt.removeCacheIfCurrent()
         }
     }
@@ -230,7 +240,7 @@ internal class UniversalBlePluginTest {
 
         mockStatic(SystemClock::class.java).use { clock ->
             clock.`when`<Long> { SystemClock.elapsedRealtime() }
-                .thenReturn(1_000L, 1_000L, 1_500L)
+                .thenReturn(1_000L, 1_000L, 1_000L, 1_500L)
             plugin.connect(deviceId, false, null)
             plugin.disconnect(deviceId.lowercase())
         }
