@@ -1918,9 +1918,13 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                     closeGatt(gatt, "connected-error-status")
                     return@completeGattCallback
                 }
-                if (directConnectQueue.isCancelled(gatt)) {
+                if (
+                    directConnectQueue.isCancelled(gatt) ||
+                    pendingDisconnectFallbacks.containsKey(gatt) ||
+                    gattCloseRecovery.isBlocked(gatt)
+                ) {
                     UniversalBleLogger.logInfo(
-                        "Ignoring connected callback for cancelling direct attempt " +
+                        "Ignoring connected callback during exact GATT teardown " +
                             "$deviceId client=${System.identityHashCode(gatt)}"
                     )
                     return@completeGattCallback

@@ -18,11 +18,13 @@ import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.anyString
+import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.mockStatic
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
 
 internal class AndroidDirectConnectPluginTest {
@@ -169,6 +171,24 @@ internal class AndroidDirectConnectPluginTest {
         assertEquals(1, f.events.count { it == "close:$scale" })
         assertFalse(f.ownedGatts().containsKey(original))
         assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
+    fun establishedDisconnectIgnoresLateConnectedCallbackAndStillForceClosesGatt() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+        clearInvocations(f.callbackChannel)
+
+        f.plugin.disconnect(scale)
+        f.connected(scale)
+        f.pump()
+
+        verifyNoInteractions(f.callbackChannel)
+        f.advance(4_000)
+        verify(original).close()
     }
 
     @Test
@@ -369,6 +389,7 @@ internal class AndroidDirectConnectPluginTest {
         val gatts = mutableMapOf<String, BluetoothGatt>()
         val failingStarts = mutableSetOf<String>()
         val closeFailuresRemaining = mutableMapOf<String, Int>()
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
         var now = 10_000L
         var overlapDetected = false
         private val states = mutableMapOf<String, Int>()
@@ -383,6 +404,7 @@ internal class AndroidDirectConnectPluginTest {
             plugin.setField("mainThreadHandler", handler)
             plugin.setField("bluetoothManager", manager)
             plugin.setField("context", context)
+            plugin.setField("callbackChannel", callbackChannel)
             `when`(manager.adapter).thenReturn(adapter)
             `when`(adapter.isEnabled).thenReturn(true)
             `when`(handler.post(any(Runnable::class.java))).thenAnswer {
