@@ -115,6 +115,12 @@ internal class AndroidDirectConnectPluginTest {
         assertFalse(scaleGatt.isCurrentGatt())
         f.connect(machine)
         f.pump()
+        assertEquals(
+            listOf(scale),
+            f.created,
+            "Recovery-blocked waiter keeps the existing reconnect cooldown semantics",
+        )
+        f.advance(1_750)
         assertEquals(listOf(scale, machine), f.created)
     }
 
