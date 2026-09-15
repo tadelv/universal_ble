@@ -41,7 +41,8 @@ internal class AndroidGattCloseRecovery<T : Any>(
     fun isBlocked(owner: T): Boolean = blocked.containsKey(owner)
 
     /**
-     * Attempt to close [owner]. The caller must retire native/cache ownership only after CLOSED.
+     * Attempt to close [owner]. Native/cache ownership is retired only by [onRecovered], which is
+     * invoked for every confirmed close (first attempt or a later retry).
      */
     fun close(owner: T, reason: String, action: () -> Unit): Result {
         val existing = blocked[owner]
@@ -55,9 +56,7 @@ internal class AndroidGattCloseRecovery<T : Any>(
         return try {
             entry.close()
             blocked.remove(owner)
-            if (entry.attempts > 1) {
-                onRecovered(owner, entry.reason, entry.attempts)
-            }
+            onRecovered(owner, entry.reason, entry.attempts)
             Result.CLOSED
         } catch (error: Exception) {
             if (entry.attempts == 1) {
