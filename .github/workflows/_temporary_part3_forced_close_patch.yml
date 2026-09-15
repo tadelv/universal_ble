@@ -1,0 +1,446 @@
+name: Temporary part3 forced-close patch
+
+on:
+  push:
+    branches:
+      - fix/871-android-gatt-lifecycle-integration
+    paths:
+      - .github/workflows/_temporary_part3_forced_close_patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'chore: apply part3 forced-close patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/871-android-gatt-lifecycle-integration
+          fetch-depth: 0
+      - name: Apply exact-GATT disconnect fallback
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          plugin_path = Path('android/src/main/kotlin/com/navideck/universal_ble/UniversalBlePlugin.kt')
+          text = plugin_path.read_text()
+
+          text = replace_once(text,
+          '''    private val pendingConnects = mutableMapOf<String, Runnable>()
+    private val minConnectDisconnectGapMs = 2000L
+    private val minDisconnectConnectGapMs = 2000L
+''',
+          '''    private val pendingConnects = mutableMapOf<String, Runnable>()
+    private val pendingDisconnectFallbacks = IdentityHashMap<BluetoothGatt, Runnable>()
+    private val minConnectDisconnectGapMs = 2000L
+    private val minDisconnectConnectGapMs = 2000L
+    private val disconnectCallbackGraceMs = 2000L
+''', 'disconnect fallback fields')
+
+          text = replace_once(text,
+          '''        val connectionKey = deviceId.connectionKey()
+        if (gattCloseRecovery.hasBlockedOwners) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_FAILED,
+                "RECOVERY_BLOCKED: unresolved native GATT teardown"
+            )
+        }
+        if (directConnectQueue.contains(connectionKey)) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
+                "Direct connection already scheduled or cancelling"
+            )
+        }
+        // Note: platformConfig only carries Apple-specific options
+        // If already connected, send connected message,
+        // if connecting, do nothing
+        deviceId.findGatt()?.let {
+            val currentState = bluetoothManager.getConnectionState(it.device, BluetoothProfile.GATT)
+            if (currentState == BluetoothGatt.STATE_CONNECTED) {
+                UniversalBleLogger.logError("$deviceId Already connected")
+                mainThreadHandler?.post {
+                    callbackChannel?.onConnectionChanged(deviceId, true, null) {}
+                }
+                return
+            } else if (currentState == BluetoothGatt.STATE_CONNECTING) {
+                throw createFlutterError(
+                    UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
+                    "Connection already in progress"
+                )
+            }
+        }
+
+        if (pendingConnects.containsKey(connectionKey)) {
+''',
+          '''        val connectionKey = deviceId.connectionKey()
+        if (directConnectQueue.contains(connectionKey)) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
+                "Direct connection already scheduled or cancelling"
+            )
+        }
+        // A healthy already-connected peer remains usable even while another exact GATT owner is
+        // being torn down. Only requests that could start/reuse the owner being torn down are
+        // recovery-blocked.
+        deviceId.findGatt()?.let { existingGatt ->
+            val teardownPending = pendingDisconnectFallbacks.containsKey(existingGatt) ||
+                gattCloseRecovery.isBlocked(existingGatt)
+            if (!teardownPending) {
+                val currentState = bluetoothManager.getConnectionState(
+                    existingGatt.device,
+                    BluetoothProfile.GATT,
+                )
+                if (currentState == BluetoothGatt.STATE_CONNECTED) {
+                    UniversalBleLogger.logError("$deviceId Already connected")
+                    mainThreadHandler?.post {
+                        callbackChannel?.onConnectionChanged(deviceId, true, null) {}
+                    }
+                    return
+                } else if (currentState == BluetoothGatt.STATE_CONNECTING) {
+                    throw createFlutterError(
+                        UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
+                        "Connection already in progress"
+                    )
+                }
+            }
+        }
+
+        if (gattCloseRecovery.hasBlockedOwners || pendingDisconnectFallbacks.isNotEmpty()) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_FAILED,
+                "RECOVERY_BLOCKED: unresolved native GATT teardown"
+            )
+        }
+
+        if (pendingConnects.containsKey(connectionKey)) {
+''', 'connect recovery gate ordering')
+
+          text = replace_once(text,
+          '''    private fun connectWhenReady(
+''',
+          '''    private fun cancelDisconnectFallback(gatt: BluetoothGatt) {
+        pendingDisconnectFallbacks.remove(gatt)?.let { pending ->
+            mainThreadHandler?.removeCallbacks(pending)
+        }
+    }
+
+    private fun scheduleDisconnectFallback(gatt: BluetoothGatt) {
+        if (!ownedGatts.containsKey(gatt) || pendingDisconnectFallbacks.containsKey(gatt)) return
+        val deviceId = gatt.device.address
+        lateinit var fallback: Runnable
+        fallback = Runnable {
+            if (pendingDisconnectFallbacks[gatt] !== fallback) return@Runnable
+            pendingDisconnectFallbacks.remove(gatt)
+            if (!ownedGatts.containsKey(gatt)) return@Runnable
+
+            val stillCurrent = gatt.isCurrentGatt()
+            UniversalBleLogger.logWarning(
+                "Disconnect callback timeout for $deviceId client=${System.identityHashCode(gatt)} " +
+                    "current=$stillCurrent ownedGatts=${ownedGatts.size} " +
+                    "t=${SystemClock.elapsedRealtime()}"
+            )
+
+            // A replacement with the same address must never be disconnected or evicted by this
+            // timeout. The exact stale owner can still be closed by object identity; cache removal
+            // in onGattCloseRecovered is identity-fenced and therefore leaves the replacement intact.
+            if (!stillCurrent) {
+                closeGatt(gatt, "disconnect-callback-timeout-stale-owner")
+                return@Runnable
+            }
+
+            cleanUpConnection(gatt)
+            connectTimestamps.remove(deviceId.connectionKey())
+            val closed = closeGatt(gatt, "disconnect-callback-timeout")
+            notifyDisconnected(
+                deviceId,
+                if (closed) "DISCONNECT_CALLBACK_TIMEOUT"
+                else "RECOVERY_BLOCKED: GATT_CLOSE_FAILED"
+            )
+        }
+        pendingDisconnectFallbacks[gatt] = fallback
+        val posted = mainThreadHandler?.postDelayed(fallback, disconnectCallbackGraceMs) == true
+        if (posted) return
+
+        pendingDisconnectFallbacks.remove(gatt)
+        if (!ownedGatts.containsKey(gatt)) return
+        val stillCurrent = gatt.isCurrentGatt()
+        UniversalBleLogger.logError(
+            "Failed to schedule disconnect callback fallback for $deviceId " +
+                "client=${System.identityHashCode(gatt)}; forcing exact-owner cleanup"
+        )
+        if (stillCurrent) {
+            cleanUpConnection(gatt)
+            connectTimestamps.remove(deviceId.connectionKey())
+        }
+        val closed = closeGatt(gatt, "disconnect-callback-fallback-schedule-failed")
+        if (stillCurrent) {
+            notifyDisconnected(
+                deviceId,
+                if (closed) "DISCONNECT_CALLBACK_TIMEOUT"
+                else "RECOVERY_BLOCKED: GATT_CLOSE_FAILED"
+            )
+        }
+    }
+
+    private fun connectWhenReady(
+''', 'fallback helper insertion')
+
+          text = replace_once(text,
+          '''    private fun onGattCloseRecovered(
+        gatt: BluetoothGatt,
+        reason: String,
+        attempts: Int,
+    ) {
+        val deviceId = gatt.device.address
+        gatt.removeCacheIfCurrent()
+''',
+          '''    private fun onGattCloseRecovered(
+        gatt: BluetoothGatt,
+        reason: String,
+        attempts: Int,
+    ) {
+        val deviceId = gatt.device.address
+        cancelDisconnectFallback(gatt)
+        gatt.removeCacheIfCurrent()
+''', 'close recovery cancels fallback')
+
+          text = replace_once(text,
+          '''        if (!gatt.isCurrentGatt()) {
+            cleanUpConnection(gatt)
+            disconnectGattBestEffort(gatt, "stale-cleanup")
+            closeGatt(gatt, "stale-cleanup")
+            return
+        }
+        disconnectGattBestEffort(gatt, "disconnect")
+        cleanUpConnection(gatt)
+        // A connect attempt that never reached STATE_CONNECTED may get no
+        // onConnectionStateChange callback after disconnect(); close and
+        // report here or the GATT client leaks (Android caps them at 32,
+        // and exhaustion surfaces as GATT 133 elsewhere).
+        val state = try {
+            bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
+        } catch (e: Exception) {
+            UniversalBleLogger.logError("Connection-state probe failed during cleanup for $deviceId: $e")
+            null
+        }
+        if (state != BluetoothProfile.STATE_CONNECTED || directConnectQueue.isCancelled(gatt)) {
+            connectTimestamps.remove(deviceId.connectionKey())
+            val closed = closeGatt(gatt, "disconnect-cleanup")
+            notifyDisconnected(
+                deviceId,
+                if (closed) null else "RECOVERY_BLOCKED: GATT_CLOSE_FAILED"
+            )
+        }
+''',
+          '''        if (!gatt.isCurrentGatt()) {
+            cancelDisconnectFallback(gatt)
+            cleanUpConnection(gatt)
+            disconnectGattBestEffort(gatt, "stale-cleanup")
+            closeGatt(gatt, "stale-cleanup")
+            return
+        }
+        disconnectGattBestEffort(gatt, "disconnect")
+        cleanUpConnection(gatt)
+        // A connect attempt that never reached STATE_CONNECTED may get no
+        // onConnectionStateChange callback after disconnect(); close and
+        // report here or the GATT client leaks (Android caps them at 32,
+        // and exhaustion surfaces as GATT 133 elsewhere).
+        val state = try {
+            bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
+        } catch (e: Exception) {
+            UniversalBleLogger.logError("Connection-state probe failed during cleanup for $deviceId: $e")
+            null
+        }
+        if (state != BluetoothProfile.STATE_CONNECTED || directConnectQueue.isCancelled(gatt)) {
+            cancelDisconnectFallback(gatt)
+            connectTimestamps.remove(deviceId.connectionKey())
+            val closed = closeGatt(gatt, "disconnect-cleanup")
+            notifyDisconnected(
+                deviceId,
+                if (closed) null else "RECOVERY_BLOCKED: GATT_CLOSE_FAILED"
+            )
+        } else {
+            // Established links normally close from STATE_DISCONNECTED. Some Android stacks never
+            // deliver that callback; keep the exact owner fenced and force-close it after a bounded
+            // grace period instead of leaking a GATT client indefinitely.
+            scheduleDisconnectFallback(gatt)
+        }
+''', 'cleanConnection fallback')
+
+          text = replace_once(text,
+          '''        val queuedDeviceIds = directConnectQueue.clear()
+        // Adapter-off / engine-detach is a whole native epoch boundary. Posted close retries from
+''',
+          '''        pendingDisconnectFallbacks.values.toList().forEach { pending ->
+            mainThreadHandler?.removeCallbacks(pending)
+        }
+        pendingDisconnectFallbacks.clear()
+        val queuedDeviceIds = directConnectQueue.clear()
+        // Adapter-off / engine-detach is a whole native epoch boundary. Posted close retries from
+''', 'epoch fallback cancellation')
+
+          text = replace_once(text,
+          '''            if (!gatt.isCurrentGatt()) {
+                cleanUpConnection(gatt)
+''',
+          '''            if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                cancelDisconnectFallback(gatt)
+            }
+
+            if (!gatt.isCurrentGatt()) {
+                cleanUpConnection(gatt)
+''', 'native callback cancels fallback')
+
+          plugin_path.write_text(text)
+
+          test_path = Path('android/src/test/kotlin/com/navideck/universal_ble/AndroidDirectConnectPluginTest.kt')
+          test = test_path.read_text()
+
+          test = replace_once(test,
+          '''    @Test
+    fun adapterOffCancelsQueuedAndAlreadyPostedAdmission() = withFixture { f ->
+''',
+          '''    @Test
+    fun establishedDisconnectWithoutCallbackForceClosesExactGatt() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        assertEquals(0, f.events.count { it == "close:$scale" })
+
+        f.advance(1_999)
+        assertEquals(0, f.events.count { it == "close:$scale" })
+        f.advance(1)
+
+        assertEquals(1, f.events.count { it == "close:$scale" })
+        assertFalse(f.ownedGatts().containsKey(original))
+        assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
+    fun nativeDisconnectCallbackCancelsForcedCloseFallback() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        f.disconnected(scale, 0)
+        f.pump()
+
+        assertEquals(1, f.events.count { it == "close:$scale" })
+        f.advance(4_000)
+        assertEquals(1, f.events.count { it == "close:$scale" })
+    }
+
+    @Test
+    fun forcedCloseFallbackCannotCloseSameAddressReplacement() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+        val replacement = f.installReplacement(scale)
+
+        f.advance(2_000)
+
+        verify(original).close()
+        verify(replacement, never()).close()
+        assertSame(replacement, scale.findGatt())
+    }
+
+    @Test
+    fun forcedCloseFailureUsesExistingRecoveryBarrier() = withFixture { f ->
+        f.closeFailuresRemaining[scale] = 1
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+        val original = f.gatts.getValue(scale)
+
+        f.plugin.disconnect(scale)
+        f.advance(4_000)
+
+        assertTrue(f.ownedGatts().containsKey(original))
+        assertSame(original, scale.findGatt())
+        assertFailsWith<FlutterError> { f.connect(machine) }
+
+        f.advance(250)
+        assertFalse(f.ownedGatts().containsKey(original))
+        assertFalse(original.isCurrentGatt())
+    }
+
+    @Test
+    fun adapterOffCancelsQueuedAndAlreadyPostedAdmission() = withFixture { f ->
+''', 'forced close regression tests')
+
+          test = replace_once(test,
+          '''        fun advance(millis: Long) {
+''',
+          '''        fun installReplacement(id: String): BluetoothGatt {
+            val key = id.connectionKey()
+            val device = mock(BluetoothDevice::class.java)
+            val replacement = mock(BluetoothGatt::class.java)
+            `when`(device.address).thenReturn(key)
+            `when`(replacement.device).thenReturn(device)
+            replacement.saveCacheIfNeeded()
+            return replacement
+        }
+
+        fun advance(millis: Long) {
+''', 'replacement fixture helper')
+
+          test_path.write_text(test)
+
+          doc_path = Path('doc/android-direct-connect-admission.md')
+          doc = doc_path.read_text()
+          marker = '''A caller can exhaust its timeout while waiting for another unavailable device;'''
+          insertion = '''### Established-link disconnect callback fallback
+
+An explicit disconnect of an already-established direct link first preserves the normal Android
+callback path. If Android still reports the exact owned GATT as connected after `disconnect()`, the
+plugin arms a 2-second callback grace timer. A real `STATE_DISCONNECTED` callback cancels that timer.
+If no callback arrives, the timer force-closes only the captured GATT object, publishes a bounded
+disconnect result, and routes any throwing `close()` through `AndroidGattCloseRecovery`.
+
+The timer is identity-fenced. If the original owner was already retired it is a no-op. If a same-
+address replacement somehow became current, the fallback may close the exact stale old object but
+never disconnects or evicts the replacement; `removeCacheIfCurrent()` remains identity-checked.
+Pending fallback tasks are cancelled at adapter/plugin epoch reset. While an exact disconnect
+fallback is outstanding, new native establishments are recovery-blocked, but idempotent access to a
+different already-connected healthy peer remains allowed.
+
+'''
+          if marker not in doc:
+              raise SystemExit('documentation marker not found')
+          doc = doc.replace(marker, insertion + marker, 1)
+          doc_path.write_text(doc)
+          PY
+
+          rm .github/workflows/_temporary_part3_forced_close_patch.yml
+          git config user.name "ODevStudio"
+          git config user.email "ODevStudio@proton.me"
+          git add android/src/main/kotlin/com/navideck/universal_ble/UniversalBlePlugin.kt \
+                  android/src/test/kotlin/com/navideck/universal_ble/AndroidDirectConnectPluginTest.kt \
+                  doc/android-direct-connect-admission.md \
+                  .github/workflows/_temporary_part3_forced_close_patch.yml
+          git diff --cached --check
+          git commit -m "fix(android): bound missing disconnect callbacks"
+          git push origin HEAD:fix/871-android-gatt-lifecycle-integration
