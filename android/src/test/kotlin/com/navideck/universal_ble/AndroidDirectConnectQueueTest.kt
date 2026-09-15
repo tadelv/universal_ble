@@ -175,6 +175,32 @@ internal class AndroidDirectConnectQueueTest {
     }
 
     @Test
+    fun recoveryBlockedDrainCancelsWaitersButRetainsExactNativeOwner() {
+        val posted = ArrayDeque<() -> Unit>()
+        val owner = Any()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> },
+        )
+
+        val active = queue.enqueue("A") { queue.bind(it, owner) }
+        val firstWaiting = queue.enqueue("B") { }
+        val secondWaiting = queue.enqueue("C") { }
+        posted.removeFirst().invoke()
+        assertEquals(AndroidDirectConnectQueue.AttemptState.NATIVE_PENDING, active.state)
+
+        val cancelled = queue.cancelPending()
+
+        assertEquals(listOf(firstWaiting, secondWaiting), cancelled)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, firstWaiting.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, secondWaiting.state)
+        assertEquals(0, queue.pendingCount)
+        assertTrue(queue.owns(owner))
+        assertTrue(queue.isActive(active))
+        assertEquals("A", queue.activeDeviceId)
+    }
+
+    @Test
     fun explicitStatesTrackQueuedNativePendingCancellingAndTerminal() {
         val posted = ArrayDeque<() -> Unit>()
         val owner = Any()
