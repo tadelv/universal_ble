@@ -209,7 +209,7 @@ internal class UniversalBlePluginTest {
     @Test
     fun mixedCaseDisconnectKeepsConnectDisconnectDelay() {
         val plugin = UniversalBlePlugin()
-        val handler = handler()
+        val handler = handler(runPostedTasks = true)
         val manager = mock(BluetoothManager::class.java)
         val adapter = mock(BluetoothAdapter::class.java)
         val device = mock(BluetoothDevice::class.java)
@@ -222,6 +222,7 @@ internal class UniversalBlePluginTest {
         plugin.setField("bluetoothManager", manager)
         plugin.setField("context", context)
         `when`(manager.adapter).thenReturn(adapter)
+        `when`(adapter.isEnabled).thenReturn(true)
         `when`(adapter.getRemoteDevice(deviceId)).thenReturn(device)
         `when`(device.connectGatt(context, false, plugin)).thenReturn(gatt)
         `when`(gatt.device).thenReturn(device)
@@ -259,6 +260,7 @@ internal class UniversalBlePluginTest {
         plugin.setField("bluetoothManager", manager)
         plugin.setField("context", context)
         `when`(manager.adapter).thenReturn(adapter)
+        `when`(adapter.isEnabled).thenReturn(true)
         `when`(adapter.getRemoteDevice(deviceId.lowercase())).thenReturn(device)
         `when`(device.connectGatt(context, false, plugin)).thenReturn(gatt)
         `when`(gatt.device).thenReturn(device)
