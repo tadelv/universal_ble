@@ -125,6 +125,56 @@ internal class AndroidDirectConnectQueueTest {
     }
 
     @Test
+    fun throwingBoundFailureCallbackRetainsNativeBarrier() {
+        val posted = ArrayDeque<() -> Unit>()
+        val owner = Any()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> throw IllegalStateException("listener failed") },
+        )
+
+        val failed = queue.enqueue("A") {
+            queue.bind(it, owner)
+            throw IllegalStateException("failure after native allocation")
+        }
+        val waiting = queue.enqueue("B") { }
+
+        assertFailsWith<IllegalStateException> { posted.removeFirst().invoke() }
+        assertEquals(AndroidDirectConnectQueue.AttemptState.CANCELLING, failed.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.QUEUED, waiting.state)
+        assertEquals("A", queue.activeDeviceId)
+        assertEquals(1, queue.pendingCount)
+
+        assertTrue(queue.complete(owner))
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, failed.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.ADMITTED, waiting.state)
+    }
+
+    @Test
+    fun repeatedCancellationOfBoundAttemptIsIdempotent() {
+        val posted = ArrayDeque<() -> Unit>()
+        val owner = Any()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> },
+        )
+
+        val first = queue.enqueue("A") { queue.bind(it, owner) }
+        val second = queue.enqueue("B") { }
+        posted.removeFirst().invoke()
+
+        assertTrue(queue.cancel(first))
+        assertTrue(queue.cancel(first))
+        assertEquals(AndroidDirectConnectQueue.AttemptState.CANCELLING, first.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.QUEUED, second.state)
+        assertEquals("A", queue.activeDeviceId)
+
+        assertTrue(queue.complete(owner))
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, first.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.ADMITTED, second.state)
+    }
+
+    @Test
     fun explicitStatesTrackQueuedNativePendingCancellingAndTerminal() {
         val posted = ArrayDeque<() -> Unit>()
         val owner = Any()
