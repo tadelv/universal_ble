@@ -1718,7 +1718,9 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 return@completeGattCallback
             }
 
-            if (newState == BluetoothGatt.STATE_CONNECTED) {
+            if (newState == BluetoothGatt.STATE_CONNECTED &&
+                status == BluetoothGatt.GATT_SUCCESS
+            ) {
                 if (directConnectQueue.isCancelled(gatt)) {
                     UniversalBleLogger.logInfo(
                         "Ignoring connected callback for cancelling direct attempt " +
@@ -1734,7 +1736,10 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 ) {}
                 directConnectQueue.complete(gatt)
                 directConnectQueue.completeExistingConnection(connectionKey)
-            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+            } else if (
+                newState == BluetoothGatt.STATE_DISCONNECTED ||
+                newState == BluetoothGatt.STATE_CONNECTED
+            ) {
                 val deviceId = gatt.device.address
                 val shouldAutoConnect = autoConnectDevices.contains(deviceId.connectionKey())
 

@@ -51,6 +51,16 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun connectedWithErrorStatusClosesBeforeStartingPeer() = withFixture { f ->
+        f.connect(scale)
+        f.connect(machine)
+        f.pump()
+        f.connected(scale, 133)
+        f.pump()
+        assertEquals(listOf("create:$scale", "close:$scale", "create:$machine"), f.events)
+    }
+
+    @Test
     fun queuedDisconnectNeverCreatesGatt() = withFixture { f ->
         f.connect(machine)
         f.connect(scale)
@@ -213,11 +223,11 @@ internal class AndroidDirectConnectPluginTest {
 
         fun connect(id: String) = plugin.connect(id, false, null)
 
-        fun connected(id: String) {
+        fun connected(id: String, status: Int = BluetoothGatt.GATT_SUCCESS) {
             val gatt = gatts.getValue(id)
             nativePending.remove(gatt)
             states[id] = BluetoothProfile.STATE_CONNECTED
-            plugin.onConnectionStateChange(gatt, 0, BluetoothProfile.STATE_CONNECTED)
+            plugin.onConnectionStateChange(gatt, status, BluetoothProfile.STATE_CONNECTED)
         }
 
         fun disconnected(id: String, status: Int) {
