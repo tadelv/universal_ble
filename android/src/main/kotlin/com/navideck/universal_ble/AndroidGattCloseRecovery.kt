@@ -51,7 +51,6 @@ internal class AndroidGattCloseRecovery<T : Any>(
         }
         if (entry.epoch != currentEpoch) return Result.BLOCKED
 
-        entry.retryPosted = false
         entry.attempts++
         return try {
             entry.close()
@@ -92,6 +91,7 @@ internal class AndroidGattCloseRecovery<T : Any>(
             if (expectedEpoch != currentEpoch) return@postDelayed
             if (blocked[entry.owner] !== entry) return@postDelayed
             entry.retryPosted = false
+            if (entry.attempts >= maxAutomaticAttempts) return@postDelayed
             close(entry.owner, entry.reason, entry.close)
         }
         if (!posted) entry.retryPosted = false

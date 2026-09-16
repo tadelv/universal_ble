@@ -64,6 +64,34 @@ internal class AndroidGattCloseRecoveryTest {
     }
 
     @Test
+    fun immediateRetryDoesNotDuplicatePostedAutomaticRetry() {
+        val tasks = ArrayDeque<() -> Unit>()
+        val owner = Any()
+        var closes = 0
+        val recovery = AndroidGattCloseRecovery<Any>(
+            postDelayed = { _, task -> tasks.add(task); true },
+            maxAutomaticAttempts = 3,
+            onBlocked = { _, _, _, _ -> },
+            onRecovered = { _, _, _ -> },
+        )
+
+        recovery.close(owner, "disconnect") {
+            closes++
+            throw IllegalStateException("close failed")
+        }
+        recovery.retry(owner)
+
+        assertEquals(2, closes)
+        assertEquals(1, tasks.size)
+
+        while (tasks.isNotEmpty()) tasks.removeFirst().invoke()
+
+        assertEquals(3, closes)
+        assertTrue(recovery.isBlocked(owner))
+        assertTrue(tasks.isEmpty())
+    }
+
+    @Test
     fun laterNativeCallbackCanRetryAfterAutomaticBudgetWasExhausted() {
         val tasks = ArrayDeque<() -> Unit>()
         val owner = Any()

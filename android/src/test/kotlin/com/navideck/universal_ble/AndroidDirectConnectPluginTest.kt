@@ -127,6 +127,45 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun blockedCloseIgnoresLateConnectedCallbackUntilExactCleanup() = withFixture { f ->
+        f.connect(machine)
+        f.pump()
+        f.connected(machine)
+        f.pump()
+        val healthyGatt = f.gatts.getValue(machine)
+
+        f.closeFailuresRemaining[scale] = 1
+        f.connect(scale)
+        f.pump()
+        val failedGatt = f.gatts.getValue(scale)
+        f.disconnected(scale, 133)
+        f.pump()
+
+        assertTrue(f.ownedGatts().containsKey(failedGatt))
+        assertSame(failedGatt, scale.findGatt())
+        clearInvocations(f.callbackChannel)
+
+        f.connectionChanged(scale, 0, BluetoothProfile.STATE_CONNECTED)
+        f.pump()
+
+        verifyNoInteractions(f.callbackChannel)
+        assertTrue(f.ownedGatts().containsKey(failedGatt))
+        assertSame(failedGatt, scale.findGatt())
+
+        f.connect(machine)
+        f.pump()
+        assertEquals(listOf(machine, scale), f.created)
+        verify(healthyGatt, never()).disconnect()
+        verify(healthyGatt, never()).close()
+
+        f.disconnected(scale, 0)
+        f.pump()
+
+        assertFalse(f.ownedGatts().containsKey(failedGatt))
+        assertFalse(failedGatt.isCurrentGatt())
+    }
+
+    @Test
     fun exhaustedCloseRetriesStayRecoveryBlockedUntilLaterExactOwnerCleanup() = withFixture { f ->
         f.closeFailuresRemaining[scale] = 10
         f.connect(scale)
