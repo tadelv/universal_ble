@@ -84,6 +84,11 @@ internal class AndroidGattCloseRecoveryTest {
         assertEquals(2, closes)
         assertEquals(1, tasks.size)
 
+        recovery.retry(owner)
+
+        assertEquals(3, closes)
+        assertEquals(1, tasks.size)
+
         while (tasks.isNotEmpty()) tasks.removeFirst().invoke()
 
         assertEquals(3, closes)
