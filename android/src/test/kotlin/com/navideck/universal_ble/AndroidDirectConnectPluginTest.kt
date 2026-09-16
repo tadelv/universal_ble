@@ -242,6 +242,24 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun admittedCooldownConnectCannotBypassLaterDisconnectFence() = withFixture { f ->
+        f.connect(scale)
+        f.pump()
+        f.connected(scale)
+        f.pump()
+
+        f.plugin.field<MutableMap<String, Long>>("disconnectTimestamps")[machine] = f.now
+        f.connect(machine)
+        f.pump()
+        assertEquals(listOf(scale), f.created)
+
+        f.plugin.disconnect(scale)
+        f.advance(2_000)
+
+        assertEquals(listOf(scale), f.created)
+    }
+
+    @Test
     fun healthyConnectedPeerRemainsIdempotentWhileOtherGattIsTearingDown() = withFixture { f ->
         f.connect(machine)
         f.pump()

@@ -562,6 +562,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 return
             }
         }
+        // Admission may have happened before another peer began teardown (for example while this
+        // request was waiting in the reconnect cooldown). Re-check immediately before allocation so
+        // no already-admitted or delayed request can bypass the exact-GATT teardown fence.
+        if (gattCloseRecovery.hasBlockedOwners || pendingDisconnectFallbacks.isNotEmpty()) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_FAILED,
+                "RECOVERY_BLOCKED: unresolved native GATT teardown"
+            )
+        }
         val remoteDevice = bluetoothManager.adapter.getRemoteDevice(deviceId)
         val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             remoteDevice.connectGatt(
