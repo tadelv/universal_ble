@@ -683,6 +683,38 @@ void main() {
   });
 
   group('connect timeout', () {
+    test('auto-connect timeout falls back to device disconnect', () async {
+      await expectLater(
+        UniversalBle.connect(
+          'device-a',
+          autoConnect: true,
+          timeout: const Duration(milliseconds: 5),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+
+      expect(mock.disconnectCalls, ['device-a']);
+      expect(mock.cancelledConnects, isEmpty);
+    });
+
+    test(
+      'explicit auto-connect cancellation falls back to disconnect',
+      () async {
+        final connecting = UniversalBle.connect(
+          'device-a',
+          autoConnect: true,
+          timeout: const Duration(seconds: 5),
+        );
+        await pumpEventQueue();
+
+        await UniversalBle.cancelConnectionAttempt('device-a');
+
+        await expectLater(connecting, throwsA(isA<ConnectionException>()));
+        expect(mock.disconnectCalls, ['device-a']);
+        expect(mock.cancelledConnects, isEmpty);
+      },
+    );
+
     test(
       'duplicate same-address attempts remain independently cancellable',
       () async {

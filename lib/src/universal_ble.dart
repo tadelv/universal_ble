@@ -21,7 +21,7 @@ class UniversalBle {
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue()
     ..onQueueBoundary = _queueBoundaryController.add;
   static StreamSubscription? _queueDrainSubscription;
-  static final Map<String, Set<String>> _connectionAttemptIds = {};
+  static final Map<String, Map<String, bool>> _connectionAttempts = {};
   static int _nextConnectionAttemptId = 0;
 
   /// Set custom platform specific implementation (e.g. for testing).
@@ -268,7 +268,7 @@ class UniversalBle {
     timeout ??= const Duration(seconds: 60);
     final deviceKey = deviceId.toLowerCase();
     final attemptId = '${++_nextConnectionAttemptId}';
-    (_connectionAttemptIds[deviceKey] ??= {}).add(attemptId);
+    (_connectionAttempts[deviceKey] ??= {})[attemptId] = autoConnect;
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
@@ -296,7 +296,11 @@ class UniversalBle {
       // OS can complete the connection later with nobody listening — a
       // stranded ("zombie") link the app can neither use nor tear down.
       try {
-        await _platform.cancelConnectionAttempt(deviceId, attemptId);
+        if (autoConnect) {
+          await _platform.disconnect(deviceId);
+        } else {
+          await _platform.cancelConnectionAttempt(deviceId, attemptId);
+        }
       } catch (e) {
         UniversalLogger.logError(
           "Cancelling timed-out connect to $deviceId failed: $e",
@@ -304,22 +308,28 @@ class UniversalBle {
       }
       rethrow;
     } finally {
-      final attempts = _connectionAttemptIds[deviceKey];
+      final attempts = _connectionAttempts[deviceKey];
       attempts?.remove(attemptId);
       if (attempts?.isEmpty == true) {
-        _connectionAttemptIds.remove(deviceKey);
+        _connectionAttempts.remove(deviceKey);
       }
     }
   }
 
   static Future<void> cancelConnectionAttempt(String deviceId) {
-    final attemptIds = _connectionAttemptIds[deviceId.toLowerCase()]?.toList();
-    if (attemptIds == null) return Future.value();
-    return Future.wait(
-      attemptIds.map(
-        (attemptId) => _platform.cancelConnectionAttempt(deviceId, attemptId),
-      ),
-    );
+    final attempts = _connectionAttempts[deviceId.toLowerCase()];
+    if (attempts == null) return Future.value();
+    final operations = <Future<void>>[
+      if (attempts.values.any((autoConnect) => autoConnect))
+        _platform.disconnect(deviceId),
+      ...attempts.entries
+          .where((attempt) => !attempt.value)
+          .map(
+            (attempt) =>
+                _platform.cancelConnectionAttempt(deviceId, attempt.key),
+          ),
+    ];
+    return Future.wait(operations);
   }
 
   /// Disconnect from a device.
