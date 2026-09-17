@@ -21,7 +21,7 @@ class UniversalBle {
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue()
     ..onQueueBoundary = _queueBoundaryController.add;
   static StreamSubscription? _queueDrainSubscription;
-  static final Map<String, String> _connectionAttemptIds = {};
+  static final Map<String, Set<String>> _connectionAttemptIds = {};
   static int _nextConnectionAttemptId = 0;
 
   /// Set custom platform specific implementation (e.g. for testing).
@@ -268,7 +268,7 @@ class UniversalBle {
     timeout ??= const Duration(seconds: 60);
     final deviceKey = deviceId.toLowerCase();
     final attemptId = '${++_nextConnectionAttemptId}';
-    _connectionAttemptIds[deviceKey] = attemptId;
+    (_connectionAttemptIds[deviceKey] ??= {}).add(attemptId);
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
@@ -304,16 +304,22 @@ class UniversalBle {
       }
       rethrow;
     } finally {
-      if (_connectionAttemptIds[deviceKey] == attemptId) {
+      final attempts = _connectionAttemptIds[deviceKey];
+      attempts?.remove(attemptId);
+      if (attempts?.isEmpty == true) {
         _connectionAttemptIds.remove(deviceKey);
       }
     }
   }
 
   static Future<void> cancelConnectionAttempt(String deviceId) {
-    final attemptId = _connectionAttemptIds[deviceId.toLowerCase()];
-    if (attemptId == null) return Future.value();
-    return _platform.cancelConnectionAttempt(deviceId, attemptId);
+    final attemptIds = _connectionAttemptIds[deviceId.toLowerCase()]?.toList();
+    if (attemptIds == null) return Future.value();
+    return Future.wait(
+      attemptIds.map(
+        (attemptId) => _platform.cancelConnectionAttempt(deviceId, attemptId),
+      ),
+    );
   }
 
   /// Disconnect from a device.

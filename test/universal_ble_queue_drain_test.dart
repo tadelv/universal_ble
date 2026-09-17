@@ -683,6 +683,30 @@ void main() {
   });
 
   group('connect timeout', () {
+    test(
+      'duplicate same-address attempts remain independently cancellable',
+      () async {
+        final first = UniversalBle.connect(
+          'device-a',
+          timeout: const Duration(seconds: 5),
+        );
+        final second = UniversalBle.connect(
+          'DEVICE-A',
+          timeout: const Duration(seconds: 5),
+        );
+        await pumpEventQueue();
+
+        await UniversalBle.cancelConnectionAttempt('device-a');
+
+        await expectLater(first, throwsA(isA<ConnectionException>()));
+        await expectLater(second, throwsA(isA<ConnectionException>()));
+        expect(
+          mock.cancelledConnects.map((attempt) => attempt.attemptId).toSet(),
+          mock.startedConnects.map((attempt) => attempt.attemptId).toSet(),
+        );
+      },
+    );
+
     test('explicit cancellation targets the active attempt', () async {
       final connecting = UniversalBle.connect(
         'device-a',
