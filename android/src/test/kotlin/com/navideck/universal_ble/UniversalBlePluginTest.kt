@@ -40,6 +40,20 @@ import org.mockito.Mockito.`when`
 
 internal class UniversalBlePluginTest {
     @Test
+    fun recoveryBlockRemainsTheLeadingConnectionFailureType() {
+        assertEquals(
+            "RECOVERY_BLOCKED: unresolved native GATT teardown",
+            connectionStartFailureDescription(
+                IllegalStateException("RECOVERY_BLOCKED: unresolved native GATT teardown")
+            ),
+        )
+        assertEquals(
+            "CONNECT_START_FAILED: connectGatt failed",
+            connectionStartFailureDescription(IllegalStateException("connectGatt failed")),
+        )
+    }
+
+    @Test
     fun missingScannerFailsStartScan() {
         val plugin = scanPlugin(null)
         val settings = mock(ScanSettings::class.java)

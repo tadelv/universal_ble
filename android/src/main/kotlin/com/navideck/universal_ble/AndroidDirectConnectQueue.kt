@@ -18,6 +18,7 @@ internal class AndroidDirectConnectQueue(
         internal val deviceKey: String,
         val generation: Long,
         val epoch: Long,
+        val requestId: String?,
         internal val start: (Attempt) -> Unit,
     ) {
         internal var nativeOwner: Any? = null
@@ -81,7 +82,11 @@ internal class AndroidDirectConnectQueue(
         return active?.deviceKey == key || pending.any { it.deviceKey == key }
     }
 
-    fun enqueue(deviceId: String, start: (Attempt) -> Unit): Attempt {
+    fun enqueue(
+        deviceId: String,
+        requestId: String? = null,
+        start: (Attempt) -> Unit,
+    ): Attempt {
         val key = key(deviceId)
         check(!contains(key)) { "Connection already scheduled for $deviceId" }
         val attempt = Attempt(
@@ -89,6 +94,7 @@ internal class AndroidDirectConnectQueue(
             deviceKey = key,
             generation = ++nextGeneration,
             epoch = currentEpoch,
+            requestId = requestId,
             start = start,
         )
         pending.add(attempt)
@@ -169,6 +175,16 @@ internal class AndroidDirectConnectQueue(
         val attempt = active ?: return
         if (attempt.deviceKey != deviceKey) return
         cancel(attempt)
+    }
+
+    fun cancel(deviceId: String, requestId: String): Attempt? {
+        val deviceKey = key(deviceId)
+        val attempt = pending.firstOrNull {
+            it.deviceKey == deviceKey && it.requestId == requestId
+        } ?: active?.takeIf {
+            it.deviceKey == deviceKey && it.requestId == requestId
+        } ?: return null
+        return if (cancel(attempt)) attempt else null
     }
 
     /**

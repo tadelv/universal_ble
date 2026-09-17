@@ -16,6 +16,8 @@ class UniversalBle {
   static UniversalBlePlatform _platform = _wireQueueDrain(_defaultPlatform());
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue();
   static StreamSubscription? _queueDrainSubscription;
+  static final Map<String, String> _connectionAttemptIds = {};
+  static int _nextConnectionAttemptId = 0;
 
   /// Set custom platform specific implementation (e.g. for testing).
   static void setInstance(UniversalBlePlatform instance) {
@@ -259,14 +261,18 @@ class UniversalBle {
     ConnectionPlatformConfig? platformConfig,
   }) async {
     timeout ??= const Duration(seconds: 60);
+    final deviceKey = deviceId.toLowerCase();
+    final attemptId = '${++_nextConnectionAttemptId}';
+    _connectionAttemptIds[deviceKey] = attemptId;
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
     );
 
     _platform
-        .connect(
+        .connectConnectionAttempt(
           deviceId,
+          attemptId,
           connectionTimeout: timeout,
           autoConnect: autoConnect,
           platformConfig: platformConfig,
@@ -285,14 +291,24 @@ class UniversalBle {
       // OS can complete the connection later with nobody listening — a
       // stranded ("zombie") link the app can neither use nor tear down.
       try {
-        await _platform.disconnect(deviceId);
+        await _platform.cancelConnectionAttempt(deviceId, attemptId);
       } catch (e) {
         UniversalLogger.logError(
           "Cancelling timed-out connect to $deviceId failed: $e",
         );
       }
       rethrow;
+    } finally {
+      if (_connectionAttemptIds[deviceKey] == attemptId) {
+        _connectionAttemptIds.remove(deviceKey);
+      }
     }
+  }
+
+  static Future<void> cancelConnectionAttempt(String deviceId) {
+    final attemptId = _connectionAttemptIds[deviceId.toLowerCase()];
+    if (attemptId == null) return Future.value();
+    return _platform.cancelConnectionAttempt(deviceId, attemptId);
   }
 
   /// Disconnect from a device.

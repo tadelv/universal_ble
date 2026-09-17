@@ -81,6 +81,37 @@ internal class AndroidDirectConnectPluginTest {
     }
 
     @Test
+    fun exactQueuedCancellationNeverCreatesGatt() = withFixture { f ->
+        f.connect(machine)
+        f.connectAttempt(scale, "scale-attempt")
+        f.pump()
+
+        f.plugin.cancelConnectionAttempt(scale.lowercase(), "scale-attempt")
+        f.connected(machine)
+        f.pump()
+
+        assertEquals(listOf(machine), f.created)
+    }
+
+    @Test
+    fun staleAttemptIdCannotCancelSameAddressReplacement() = withFixture { f ->
+        f.connectAttempt(scale, "old")
+        f.pump()
+        f.plugin.cancelConnectionAttempt(scale, "old")
+        f.advance(2_000)
+
+        f.connectAttempt(scale, "replacement")
+        f.pump()
+        val replacement = f.gatts.getValue(scale)
+        clearInvocations(replacement)
+
+        f.plugin.cancelConnectionAttempt(scale, "old")
+
+        verify(replacement, never()).disconnect()
+        verify(replacement, never()).close()
+    }
+
+    @Test
     fun activeCancellationWaitsForCloseEvenWithLateConnectedCallback() = withFixture { f ->
         f.connect(scale)
         f.connect(machine)
@@ -495,6 +526,9 @@ internal class AndroidDirectConnectPluginTest {
         }
 
         fun connect(id: String) = plugin.connect(id, false, null)
+
+        fun connectAttempt(id: String, attemptId: String) =
+            plugin.connectConnectionAttempt(id, attemptId, false, null)
 
         fun ownedGatts(): IdentityHashMap<BluetoothGatt, Unit> = plugin.field("ownedGatts")
 

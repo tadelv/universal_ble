@@ -49,6 +49,24 @@ internal class AndroidDirectConnectQueueTest {
     }
 
     @Test
+    fun requestIdCancelsOnlyItsExactAttempt() {
+        val posted = ArrayDeque<() -> Unit>()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> },
+        )
+
+        val old = queue.enqueue("scale", "old") { queue.completeWithoutGatt(it) }
+        assertNull(queue.cancel("scale", "stale"))
+        assertTrue(queue.isActive(old))
+        assertSame(old, queue.cancel("SCALE", "old"))
+
+        val replacement = queue.enqueue("scale", "replacement") { }
+        assertNull(queue.cancel("scale", "old"))
+        assertTrue(queue.isActive(replacement))
+    }
+
+    @Test
     fun reentrantFailureCallbackIsDeliveredExactlyOnce() {
         lateinit var queue: AndroidDirectConnectQueue
         val callbacks = mutableListOf<Long>()

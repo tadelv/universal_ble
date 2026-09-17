@@ -1345,6 +1345,14 @@ class UniversalBleAndroidChannel {
   // BluetoothGatt#refresh() method. Remedy for stale service caches on
   // misbehaving stacks or after peripheral firmware updates.
   virtual std::optional<FlutterError> ClearGattCache(const std::string& device_id) = 0;
+  virtual std::optional<FlutterError> ConnectConnectionAttempt(
+    const std::string& device_id,
+    const std::string& attempt_id,
+    const bool* auto_connect,
+    const ConnectionPlatformConfig* platform_config) = 0;
+  virtual std::optional<FlutterError> CancelConnectionAttempt(
+    const std::string& device_id,
+    const std::string& attempt_id) = 0;
 
   // The codec used by UniversalBleAndroidChannel.
   static const ::flutter::StandardMessageCodec& GetCodec();
