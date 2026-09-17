@@ -9,6 +9,8 @@ import 'dart:async';
 /// earlier pending items, preventing queue bloat from rapid repeated writes
 /// to the same BLE characteristic. Pass [coalesceKey] to [add] to opt in.
 class Queue {
+  static int _nextGeneration = 0;
+  final int generation = ++_nextGeneration;
   final Object? timeoutError;
   final Set<int> _activeItems = {};
   final Map<int, _OperationToken> _unresolvedTokens = {};
@@ -17,17 +19,25 @@ class Queue {
   bool _paused = false;
   final List<_QueuedFuture> _nextCycle = [];
   Function(int)? onRemainingItemsUpdate;
+  void Function()? onFault;
 
   Queue({this.timeoutError});
 
   bool get isFaulted => _state == _QueueState.faulted;
   int get pendingOperations => _nextCycle.length;
   int get activeOperations => _unresolvedTokens.length;
+  List<String> get activeOperationLabels => List.unmodifiable(
+    _unresolvedTokens.values.take(32).map((token) => token.label),
+  );
+  List<String> get pendingOperationLabels => List.unmodifiable(
+    _nextCycle.take(32).map((item) => item.diagnosticLabel),
+  );
 
   Future<T> add<T>(
     Future<T> Function() closure, [
     Duration? timeout,
     String? coalesceKey,
+    String diagnosticLabel = 'unspecified',
   ]) {
     if (_state == _QueueState.faulted) {
       throw timeoutError ?? Exception('Queue faulted after operation timeout');
@@ -38,7 +48,13 @@ class Queue {
     }
     final completer = Completer<T>();
     _nextCycle.add(
-      _QueuedFuture<T>(closure, completer, timeout, coalesceKey: coalesceKey),
+      _QueuedFuture<T>(
+        closure,
+        completer,
+        timeout,
+        coalesceKey: coalesceKey,
+        diagnosticLabel: diagnosticLabel,
+      ),
     );
     _updateRemainingItems();
     if (_activeItems.isEmpty) _queueUpNext();
@@ -62,6 +78,7 @@ class Queue {
     }
     _unresolvedTokens.clear();
     _state = _QueueState.disposed;
+    onFault = null;
     final remainingItemsUpdate = onRemainingItemsUpdate;
     onRemainingItemsUpdate = null;
     remainingItemsUpdate?.call(0);
@@ -85,6 +102,9 @@ class Queue {
   void _fault() {
     if (_state != _QueueState.running) return;
     _state = _QueueState.faulted;
+    try {
+      onFault?.call();
+    } catch (_) {}
     final error =
         timeoutError ?? Exception('Queue faulted after operation timeout');
     for (final item in _nextCycle) {
@@ -119,7 +139,7 @@ class Queue {
       final item = _nextCycle.first;
       _lastProcessId++;
       _nextCycle.remove(item);
-      final token = _OperationToken(processId, this);
+      final token = _OperationToken(processId, this, item.diagnosticLabel);
       item._token = token;
       _unresolvedTokens[processId] = token;
       unawaited(item.execute());
@@ -142,9 +162,10 @@ class Queue {
 /// future does not reach back into a queue that has already been disposed.
 class _OperationToken {
   final int processId;
+  final String label;
   Queue? _queue;
 
-  _OperationToken(this.processId, this._queue);
+  _OperationToken(this.processId, this._queue, this.label);
 
   void underlyingComplete() {
     _queue?._unresolvedTokens.remove(processId);
@@ -170,12 +191,14 @@ class _QueuedFuture<T> {
   _OperationToken? _token;
   final Duration? timeout;
   final String? coalesceKey;
+  final String diagnosticLabel;
 
   _QueuedFuture(
     Future<T> Function() closure,
     this.completer,
     this.timeout, {
     this.coalesceKey,
+    this.diagnosticLabel = 'unspecified',
   }) : _closure = closure;
 
   /// Track [underlying] completion without capturing the command closure.
