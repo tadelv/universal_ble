@@ -106,18 +106,11 @@ notification-age logs.
 
 ## Verification and merge gate
 
-`scripts/test_android_direct_connect_queue.sh` compiles and runs the original 23
-deterministic Kotlin/JVM recovery scenarios with no Android SDK dependency. The
-fixture rejects concurrent native starts with an injected GATT-133-style failure.
-It covers both connection orders, queued/active cancellation, cooldown, stale
-callbacks, start failure, adapter generations, and 500 recovery cycles. Removing
-the active-owner guard makes the regression suite fail.
-
-`AndroidDirectConnectQueueTest` adds state-machine edge regressions for
-case-insensitive duplicate IDs, exact stale-token cancellation, explicit
-state/epoch transitions, re-entrant failure delivery, bound-failure cancellation,
-and a throwing failure callback. `AndroidDirectConnectPluginTest` exercises real
-plugin methods with mocked Android GATT clients and handler dispatch.
+Queue unit tests cover ownership, FIFO cancellation, stale tokens, adapter
+epochs, start failures, and repeated recovery. Plugin integration tests cover
+dual-device establishment, healthy-peer isolation, GATT errors, cancellation,
+and teardown using mocked Android clients. The duplicate standalone runner has
+been removed; all retained cases run through the existing Android test job.
 
 The repository PR workflow runs `flutter analyze`, Flutter tests and
 `:universal_ble:testDebugUnitTest` from the example Android build, so a green

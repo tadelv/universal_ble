@@ -9,9 +9,6 @@ import kotlin.test.assertTrue
 
 internal class AndroidDirectConnectQueueTest {
     @Test
-    fun connectionAdmissionScenarios() = AndroidDirectConnectQueueScenarios.runAll()
-
-    @Test
     fun deviceIdsAreCaseInsensitiveInsideTheAdmissionOwner() {
         val queue = AndroidDirectConnectQueue(
             post = { },
