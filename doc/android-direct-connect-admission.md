@@ -168,18 +168,10 @@ per-device queue and notification-age logs.
 
 ## Verification and merge gate
 
-`scripts/test_android_direct_connect_queue.sh` compiles and runs the original 23
-deterministic Kotlin/JVM recovery scenarios with no Android SDK dependency. The
-fixture rejects concurrent native starts with an injected GATT-133-style failure.
-It covers both connection orders, queued/active cancellation, cooldown, stale
-callbacks, start failure, adapter generations, and 500 recovery cycles. Removing
-the active-owner guard makes the regression suite fail.
-
-`AndroidDirectConnectQueueTest` adds state-machine edge regressions for
-case-insensitive duplicate IDs, exact stale-token cancellation, explicit
-state/epoch transitions, re-entrant failure delivery, bound-failure cancellation,
-a throwing failure callback, and draining queued callers while retaining an
-exact blocked native owner.
+Queue unit tests cover ownership, FIFO cancellation, stale tokens, adapter
+epochs, start failures, and repeated recovery. The retained standalone ownership
+cases now run through `AndroidDirectConnectQueueOwnershipTest` in the existing
+Android test job.
 
 `AndroidGattCloseRecoveryTest` covers close failure followed by recovery,
 automatic-retry exhaustion that stays blocked, later explicit recovery after the
