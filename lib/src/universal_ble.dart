@@ -21,7 +21,7 @@ class UniversalBle {
   static final BleCommandQueue _bleCommandQueue = BleCommandQueue()
     ..onQueueBoundary = _queueBoundaryController.add;
   static StreamSubscription? _queueDrainSubscription;
-  static final Map<String, Map<String, bool>> _connectionAttempts = {};
+  static final Map<String, String> _connectionAttemptIds = {};
   static int _nextConnectionAttemptId = 0;
 
   /// Set custom platform specific implementation (e.g. for testing).
@@ -267,25 +267,30 @@ class UniversalBle {
   }) async {
     timeout ??= const Duration(seconds: 60);
     final deviceKey = deviceId.toLowerCase();
-    final attemptId = '${++_nextConnectionAttemptId}';
-    (_connectionAttempts[deviceKey] ??= {})[attemptId] = autoConnect;
+    final attemptId = autoConnect ? null : '${++_nextConnectionAttemptId}';
+    if (attemptId != null) _connectionAttemptIds[deviceKey] = attemptId;
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
     );
 
-    _platform
-        .connectConnectionAttempt(
-          deviceId,
-          attemptId,
-          connectionTimeout: timeout,
-          autoConnect: autoConnect,
-          platformConfig: platformConfig,
-        )
-        .catchError((error) {
-          if (completer.isCompleted) return;
-          completer.completeError(ConnectionException(error));
-        });
+    final connect = attemptId == null
+        ? _platform.connect(
+            deviceId,
+            connectionTimeout: timeout,
+            autoConnect: true,
+            platformConfig: platformConfig,
+          )
+        : _platform.connectConnectionAttempt(
+            deviceId,
+            attemptId,
+            connectionTimeout: timeout,
+            platformConfig: platformConfig,
+          );
+    connect.catchError((error) {
+      if (completer.isCompleted) return;
+      completer.completeError(ConnectionException(error));
+    });
 
     try {
       if (!await completer.future.timeout(timeout)) {
@@ -296,7 +301,7 @@ class UniversalBle {
       // OS can complete the connection later with nobody listening — a
       // stranded ("zombie") link the app can neither use nor tear down.
       try {
-        if (autoConnect) {
+        if (attemptId == null) {
           await _platform.disconnect(deviceId);
         } else {
           await _platform.cancelConnectionAttempt(deviceId, attemptId);
@@ -308,28 +313,16 @@ class UniversalBle {
       }
       rethrow;
     } finally {
-      final attempts = _connectionAttempts[deviceKey];
-      attempts?.remove(attemptId);
-      if (attempts?.isEmpty == true) {
-        _connectionAttempts.remove(deviceKey);
+      if (_connectionAttemptIds[deviceKey] == attemptId) {
+        _connectionAttemptIds.remove(deviceKey);
       }
     }
   }
 
   static Future<void> cancelConnectionAttempt(String deviceId) {
-    final attempts = _connectionAttempts[deviceId.toLowerCase()];
-    if (attempts == null) return Future.value();
-    final operations = <Future<void>>[
-      if (attempts.values.any((autoConnect) => autoConnect))
-        _platform.disconnect(deviceId),
-      ...attempts.entries
-          .where((attempt) => !attempt.value)
-          .map(
-            (attempt) =>
-                _platform.cancelConnectionAttempt(deviceId, attempt.key),
-          ),
-    ];
-    return Future.wait(operations);
+    final attemptId = _connectionAttemptIds[deviceId.toLowerCase()];
+    if (attemptId == null) return Future.value();
+    return _platform.cancelConnectionAttempt(deviceId, attemptId);
   }
 
   /// Disconnect from a device.
