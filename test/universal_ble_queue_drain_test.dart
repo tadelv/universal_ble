@@ -14,6 +14,7 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   final List<String> disconnectCalls = [];
   final List<({String deviceId, String attemptId})> cancelledConnects = [];
   final List<({String deviceId, String attemptId})> startedConnects = [];
+  bool rejectDuplicateConnects = false;
   final List<String> startedWrites = [];
   final List<Completer<void>> writeStartMarkers = [];
   final List<({String deviceId, String characteristic})> completedWrites = [];
@@ -53,6 +54,13 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
     bool autoConnect = false,
     ConnectionPlatformConfig? platformConfig,
   }) async {
+    if (rejectDuplicateConnects &&
+        startedConnects.any(
+          (attempt) =>
+              attempt.deviceId.toLowerCase() == deviceId.toLowerCase(),
+        )) {
+      throw StateError('connection already pending');
+    }
     startedConnects.add((deviceId: deviceId, attemptId: attemptId));
   }
 
@@ -708,6 +716,27 @@ void main() {
 
       await expectLater(connecting, throwsA(isA<ConnectionException>()));
       expect(mock.cancelledConnects, hasLength(1));
+      expect(
+        mock.cancelledConnects.single.attemptId,
+        mock.startedConnects.single.attemptId,
+      );
+    });
+
+    test('rejected duplicate preserves the active cancellation target', () async {
+      mock.rejectDuplicateConnects = true;
+      final first = UniversalBle.connect(
+        'device-a',
+        timeout: const Duration(seconds: 5),
+      );
+      await pumpEventQueue();
+
+      await expectLater(
+        UniversalBle.connect('DEVICE-A'),
+        throwsA(isA<ConnectionException>()),
+      );
+      await UniversalBle.cancelConnectionAttempt('device-a');
+
+      await expectLater(first, throwsA(isA<ConnectionException>()));
       expect(
         mock.cancelledConnects.single.attemptId,
         mock.startedConnects.single.attemptId,

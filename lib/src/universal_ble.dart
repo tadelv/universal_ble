@@ -268,7 +268,9 @@ class UniversalBle {
     timeout ??= const Duration(seconds: 60);
     final deviceKey = deviceId.toLowerCase();
     final attemptId = autoConnect ? null : '${++_nextConnectionAttemptId}';
-    if (attemptId != null) _connectionAttemptIds[deviceKey] = attemptId;
+    if (attemptId != null) {
+      _connectionAttemptIds.putIfAbsent(deviceKey, () => attemptId);
+    }
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
