@@ -76,6 +76,10 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val pendingConnects = mutableMapOf<String, Runnable>()
     private val minConnectDisconnectGapMs = 2000L
     private val minDisconnectConnectGapMs = 2000L
+    private val directConnectQueue = AndroidDirectConnectQueue(
+        post = { task -> check(requireNotNull(mainThreadHandler).post { task() }) },
+        onStartFailure = ::onDirectConnectStartFailure,
+    )
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -278,6 +282,12 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         platformConfig: ConnectionPlatformConfig?,
     ) {
         val connectionKey = deviceId.connectionKey()
+        if (directConnectQueue.contains(connectionKey)) {
+            throw createFlutterError(
+                UniversalBleErrorCode.CONNECTION_IN_PROGRESS,
+                "Direct connection already scheduled or cancelling"
+            )
+        }
         // Note: platformConfig only carries Apple-specific options
         // If already connected, send connected message,
         // if connecting, do nothing
@@ -310,6 +320,54 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         } else {
             autoConnectDevices.remove(connectionKey)
         }
+        if (shouldAutoConnect) {
+            connectWhenReady(deviceId, true, null)
+        } else {
+            val blockingDevice = directConnectQueue.activeDeviceId
+            if (blockingDevice != null) {
+                UniversalBleLogger.logInfo(
+                    "Deferring direct connect of $deviceId behind $blockingDevice " +
+                        "generation=${directConnectQueue.activeGeneration} " +
+                        "queued=${directConnectQueue.pendingCount} ownedGatts=${ownedGatts.size}"
+                )
+            }
+            directConnectQueue.enqueue(connectionKey) { attempt ->
+                UniversalBleLogger.logInfo(
+                    "Admitting direct connect of $deviceId generation=${attempt.generation} " +
+                        "queued=${directConnectQueue.pendingCount} ownedGatts=${ownedGatts.size}"
+                )
+                connectWhenReady(deviceId, false, attempt)
+            }
+        }
+    }
+
+    private fun onDirectConnectStartFailure(
+        attempt: AndroidDirectConnectQueue.Attempt,
+        error: Exception,
+    ) {
+        pendingConnects.remove(attempt.deviceId)?.let { mainThreadHandler?.removeCallbacks(it) }
+        UniversalBleLogger.logError(
+            "Direct connect start failed for ${attempt.deviceId} " +
+                "generation=${attempt.generation}: $error"
+        )
+        if (attempt.nativeOwner != null) disconnect(attempt.deviceId)
+        notifyDisconnected(
+            attempt.deviceId,
+            "CONNECT_START_FAILED: ${error.message ?: error.javaClass.simpleName}"
+        )
+    }
+
+    private fun connectWhenReady(
+        deviceId: String,
+        shouldAutoConnect: Boolean,
+        attempt: AndroidDirectConnectQueue.Attempt?,
+    ) {
+        if (attempt != null && !directConnectQueue.isActive(attempt)) return
+        if (!isBluetoothAvailable()) throw createFlutterError(
+            UniversalBleErrorCode.BLUETOOTH_NOT_ENABLED,
+            "Bluetooth not enabled"
+        )
+        val connectionKey = deviceId.connectionKey()
         val reconnectDelay = remainingReconnectDelay(
             SystemClock.elapsedRealtime(),
             disconnectTimestamps[connectionKey],
@@ -321,6 +379,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             )
             lateinit var pendingConnect: Runnable
             pendingConnect = Runnable {
+                if (pendingConnects[connectionKey] !== pendingConnect) return@Runnable
+                if (attempt != null && !directConnectQueue.isActive(attempt)) return@Runnable
                 val remainingDelay = remainingReconnectDelay(
                     SystemClock.elapsedRealtime(),
                     disconnectTimestamps[connectionKey],
@@ -332,15 +392,19 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 ) {
                     pendingConnects.remove(connectionKey)
                     disconnectTimestamps.remove(connectionKey)
-                    connectNow(deviceId, shouldAutoConnect)
+                    connectNow(deviceId, shouldAutoConnect, attempt)
                 }?.let { error ->
-                    UniversalBleLogger.logError(
-                        "Delayed connect start failed for $deviceId: $error"
-                    )
-                    notifyDisconnected(
-                        deviceId,
-                        "CONNECT_START_FAILED: ${error.message ?: error.javaClass.simpleName}"
-                    )
+                    if (attempt != null) {
+                        directConnectQueue.fail(attempt, error)
+                    } else {
+                        UniversalBleLogger.logError(
+                            "Delayed connect start failed for $deviceId: $error"
+                        )
+                        notifyDisconnected(
+                            deviceId,
+                            "CONNECT_START_FAILED: ${error.message ?: error.javaClass.simpleName}"
+                        )
+                    }
                 }
             }
             pendingConnects[connectionKey] = pendingConnect
@@ -348,10 +412,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             return
         }
         disconnectTimestamps.remove(connectionKey)
-        connectNow(deviceId, shouldAutoConnect)
+        connectNow(deviceId, shouldAutoConnect, attempt)
     }
 
-    private fun connectNow(deviceId: String, shouldAutoConnect: Boolean) {
+    private fun connectNow(
+        deviceId: String,
+        shouldAutoConnect: Boolean,
+        attempt: AndroidDirectConnectQueue.Attempt?,
+    ) {
+        if (attempt != null && !directConnectQueue.isActive(attempt)) return
         val connectionKey = deviceId.connectionKey()
         deviceId.findGatt()?.let {
             val currentState = bluetoothManager.getConnectionState(it.device, BluetoothProfile.GATT)
@@ -359,9 +428,13 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 mainThreadHandler?.post {
                     callbackChannel?.onConnectionChanged(deviceId, true, null) {}
                 }
+                if (attempt != null) directConnectQueue.completeWithoutGatt(attempt)
                 return
             }
-            if (currentState == BluetoothGatt.STATE_CONNECTING) return
+            if (currentState == BluetoothGatt.STATE_CONNECTING) {
+                if (attempt != null) directConnectQueue.bind(attempt, it)
+                return
+            }
         }
         val remoteDevice = bluetoothManager.adapter.getRemoteDevice(deviceId)
         val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -383,9 +456,18 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         } else {
             remoteDevice.connectGatt(context, shouldAutoConnect, this)
         }
+        if (gatt == null) throw createFlutterError(
+            UniversalBleErrorCode.CONNECTION_FAILED,
+            "connectGatt returned no GATT client"
+        )
         connectTimestamps[connectionKey] = SystemClock.elapsedRealtime()
         gatt.saveCacheIfNeeded()
         ownedGatts[gatt] = Unit
+        if (attempt != null) directConnectQueue.bind(attempt, gatt)
+        UniversalBleLogger.logDebug(
+            "Created GATT for $deviceId client=${System.identityHashCode(gatt)} " +
+                "generation=${attempt?.generation} ownedGatts=${ownedGatts.size}"
+        )
     }
 
     private fun completeGattCallback(action: () -> Unit) {
@@ -400,6 +482,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         val connectionKey = deviceId.connectionKey()
         autoConnectDevices.remove(connectionKey)
         pendingConnects.remove(connectionKey)?.let { mainThreadHandler?.removeCallbacks(it) }
+        directConnectQueue.cancel(connectionKey)
         val gatt = deviceId.findGatt()
         if (gatt == null) {
             cleanUpConnections(deviceId)
@@ -1447,7 +1530,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         // report here or the GATT client leaks (Android caps them at 32,
         // and exhaustion surfaces as GATT 133 elsewhere).
         val state = bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
-        if (state != BluetoothProfile.STATE_CONNECTED) {
+        if (state != BluetoothProfile.STATE_CONNECTED || directConnectQueue.isCancelled(gatt)) {
             connectTimestamps.remove(deviceId.connectionKey())
             gatt.removeCacheIfCurrent()
             closeGatt(gatt)
@@ -1456,8 +1539,13 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     }
 
     private fun closeGatt(gatt: BluetoothGatt) {
-        ownedGatts.remove(gatt)
         gatt.close()
+        ownedGatts.remove(gatt)
+        directConnectQueue.complete(gatt)
+        UniversalBleLogger.logDebug(
+            "Closed GATT for ${gatt.device.address} client=${System.identityHashCode(gatt)} " +
+                "ownedGatts=${ownedGatts.size}"
+        )
     }
 
     private fun notifyDisconnected(deviceId: String, error: String?) {
@@ -1487,8 +1575,9 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         notificationError: String?,
         gatts: List<BluetoothGatt>,
     ) {
+        val queuedDeviceIds = directConnectQueue.clear()
         disposeTemporaryDiscoveryGatts()
-        val pendingDeviceIds = pendingConnects.keys.toList()
+        val pendingDeviceIds = pendingConnects.keys.toList() + queuedDeviceIds
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
         pendingConnects.clear()
         for (gatt in gatts) {
@@ -1629,14 +1718,28 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 return@completeGattCallback
             }
 
-            if (newState == BluetoothGatt.STATE_CONNECTED) {
+            if (newState == BluetoothGatt.STATE_CONNECTED &&
+                status == BluetoothGatt.GATT_SUCCESS
+            ) {
+                if (directConnectQueue.isCancelled(gatt)) {
+                    UniversalBleLogger.logInfo(
+                        "Ignoring connected callback for cancelling direct attempt " +
+                            "${gatt.device.address} client=${System.identityHashCode(gatt)}"
+                    )
+                    return@completeGattCallback
+                }
                 val connectionKey = gatt.device.address.connectionKey()
                 pendingConnects.remove(connectionKey)?.let { mainThreadHandler?.removeCallbacks(it) }
                 disconnectTimestamps.remove(connectionKey)
                 callbackChannel?.onConnectionChanged(
                     gatt.device.address, true, status.parseHciErrorCode()
                 ) {}
-            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                directConnectQueue.complete(gatt)
+                directConnectQueue.completeExistingConnection(connectionKey)
+            } else if (
+                newState == BluetoothGatt.STATE_DISCONNECTED ||
+                newState == BluetoothGatt.STATE_CONNECTED
+            ) {
                 val deviceId = gatt.device.address
                 val shouldAutoConnect = autoConnectDevices.contains(deviceId.connectionKey())
 
