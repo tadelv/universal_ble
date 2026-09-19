@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 internal class AndroidDirectConnectQueueTest {
@@ -43,6 +44,24 @@ internal class AndroidDirectConnectQueueTest {
         assertFalse(queue.cancel(old))
         assertTrue(queue.isActive(replacement))
         assertTrue(queue.contains("scale"))
+    }
+
+    @Test
+    fun requestIdCancelsOnlyItsExactAttempt() {
+        val posted = ArrayDeque<() -> Unit>()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> },
+        )
+
+        val old = queue.enqueue("scale", "old") { queue.completeWithoutGatt(it) }
+        assertNull(queue.cancel("scale", "stale"))
+        assertTrue(queue.isActive(old))
+        assertSame(old, queue.cancel("SCALE", "old"))
+
+        val replacement = queue.enqueue("scale", "replacement") { }
+        assertNull(queue.cancel("scale", "old"))
+        assertTrue(queue.isActive(replacement))
     }
 
     @Test
@@ -169,6 +188,32 @@ internal class AndroidDirectConnectQueueTest {
         assertTrue(queue.complete(owner))
         assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, first.state)
         assertEquals(AndroidDirectConnectQueue.AttemptState.ADMITTED, second.state)
+    }
+
+    @Test
+    fun recoveryBlockedDrainCancelsWaitersButRetainsExactNativeOwner() {
+        val posted = ArrayDeque<() -> Unit>()
+        val owner = Any()
+        val queue = AndroidDirectConnectQueue(
+            post = { posted.add(it) },
+            onStartFailure = { _, _ -> },
+        )
+
+        val active = queue.enqueue("A") { queue.bind(it, owner) }
+        val firstWaiting = queue.enqueue("B") { }
+        val secondWaiting = queue.enqueue("C") { }
+        posted.removeFirst().invoke()
+        assertEquals(AndroidDirectConnectQueue.AttemptState.NATIVE_PENDING, active.state)
+
+        val cancelled = queue.cancelPending()
+
+        assertEquals(listOf(firstWaiting, secondWaiting), cancelled)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, firstWaiting.state)
+        assertEquals(AndroidDirectConnectQueue.AttemptState.TERMINAL, secondWaiting.state)
+        assertEquals(0, queue.pendingCount)
+        assertTrue(queue.owns(owner))
+        assertTrue(queue.isActive(active))
+        assertEquals("A", queue.activeDeviceId)
     }
 
     @Test

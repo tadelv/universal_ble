@@ -14,8 +14,15 @@ class UniversalBle {
 
   /// Get platform specific implementation.
   static UniversalBlePlatform _platform = _wireQueueDrain(_defaultPlatform());
-  static final BleCommandQueue _bleCommandQueue = BleCommandQueue();
+  static final _queueBoundaryController =
+      StreamController<QueueDiagnostics>.broadcast(sync: true);
+  static Stream<QueueDiagnostics> get queueBoundaryStream =>
+      _queueBoundaryController.stream;
+  static final BleCommandQueue _bleCommandQueue = BleCommandQueue()
+    ..onQueueBoundary = _queueBoundaryController.add;
   static StreamSubscription? _queueDrainSubscription;
+  static final Map<String, String> _connectionAttemptIds = {};
+  static int _nextConnectionAttemptId = 0;
 
   /// Set custom platform specific implementation (e.g. for testing).
   static void setInstance(UniversalBlePlatform instance) {
@@ -259,22 +266,33 @@ class UniversalBle {
     ConnectionPlatformConfig? platformConfig,
   }) async {
     timeout ??= const Duration(seconds: 60);
+    final deviceKey = deviceId.toLowerCase();
+    final attemptId = autoConnect ? null : '${++_nextConnectionAttemptId}';
+    if (attemptId != null) {
+      _connectionAttemptIds.putIfAbsent(deviceKey, () => attemptId);
+    }
     Completer<bool> completer = _connectionEventCompleter(
       deviceId,
       timeout: timeout,
     );
 
-    _platform
-        .connect(
-          deviceId,
-          connectionTimeout: timeout,
-          autoConnect: autoConnect,
-          platformConfig: platformConfig,
-        )
-        .catchError((error) {
-          if (completer.isCompleted) return;
-          completer.completeError(ConnectionException(error));
-        });
+    final connect = attemptId == null
+        ? _platform.connect(
+            deviceId,
+            connectionTimeout: timeout,
+            autoConnect: true,
+            platformConfig: platformConfig,
+          )
+        : _platform.connectConnectionAttempt(
+            deviceId,
+            attemptId,
+            connectionTimeout: timeout,
+            platformConfig: platformConfig,
+          );
+    connect.catchError((error) {
+      if (completer.isCompleted) return;
+      completer.completeError(ConnectionException(error));
+    });
 
     try {
       if (!await completer.future.timeout(timeout)) {
@@ -285,14 +303,28 @@ class UniversalBle {
       // OS can complete the connection later with nobody listening — a
       // stranded ("zombie") link the app can neither use nor tear down.
       try {
-        await _platform.disconnect(deviceId);
+        if (attemptId == null) {
+          await _platform.disconnect(deviceId);
+        } else {
+          await _platform.cancelConnectionAttempt(deviceId, attemptId);
+        }
       } catch (e) {
         UniversalLogger.logError(
           "Cancelling timed-out connect to $deviceId failed: $e",
         );
       }
       rethrow;
+    } finally {
+      if (_connectionAttemptIds[deviceKey] == attemptId) {
+        _connectionAttemptIds.remove(deviceKey);
+      }
     }
+  }
+
+  static Future<void> cancelConnectionAttempt(String deviceId) {
+    final attemptId = _connectionAttemptIds[deviceId.toLowerCase()];
+    if (attemptId == null) return Future.value();
+    return _platform.cancelConnectionAttempt(deviceId, attemptId);
   }
 
   /// Disconnect from a device.
@@ -355,6 +387,7 @@ class UniversalBle {
   }) async {
     return await _bleCommandQueue.queueCommand(
       () => _platform.discoverServices(deviceId, withDescriptors),
+      diagnosticLabel: 'discoverServices',
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
@@ -438,6 +471,7 @@ class UniversalBle {
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
+      diagnosticLabel: 'read/$service/$characteristic',
     );
   }
 
@@ -466,6 +500,7 @@ class UniversalBle {
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
+      diagnosticLabel: 'write/$service/$characteristic',
       coalesceKey: coalesceKey,
     );
   }
@@ -493,6 +528,7 @@ class UniversalBle {
   }) async {
     return await _bleCommandQueue.queueCommand(
       () => _platform.requestMtu(deviceId, expectedMtu),
+      diagnosticLabel: 'requestMtu',
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
@@ -519,6 +555,7 @@ class UniversalBle {
   }) async {
     return await _bleCommandQueue.queueCommand(
       () => _platform.requestConnectionPriority(deviceId, priority),
+      diagnosticLabel: 'requestConnectionPriority',
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
@@ -543,6 +580,7 @@ class UniversalBle {
   }) async {
     return await _bleCommandQueue.queueCommand(
       () => _platform.readRssi(deviceId),
+      diagnosticLabel: 'readRssi',
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
@@ -722,6 +760,7 @@ class UniversalBle {
   }) async {
     return await _bleCommandQueue.queueCommand(
       () => _platform.clearGattCache(deviceId),
+      diagnosticLabel: 'clearGattCache',
       timeout: timeout,
       deviceId: deviceId,
       queueId: queueId,
@@ -905,6 +944,7 @@ class UniversalBle {
       deviceId: deviceId,
       timeout: timeout,
       queueId: queueId,
+      diagnosticLabel: '${bleInputProperty.name}/$service/$characteristic',
     );
   }
 

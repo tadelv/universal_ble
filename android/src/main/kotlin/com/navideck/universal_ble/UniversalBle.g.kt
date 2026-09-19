@@ -2559,6 +2559,8 @@ interface UniversalBleAndroidChannel {
    * misbehaving stacks or after peripheral firmware updates.
    */
   fun clearGattCache(deviceId: String)
+  fun connectConnectionAttempt(deviceId: String, attemptId: String, autoConnect: Boolean?, platformConfig: ConnectionPlatformConfig?)
+  fun cancelConnectionAttempt(deviceId: String, attemptId: String)
 
   companion object {
     /** The codec used by UniversalBleAndroidChannel. */
@@ -2610,6 +2612,46 @@ interface UniversalBleAndroidChannel {
             val deviceIdArg = args[0] as String
             val wrapped: List<Any?> = try {
               api.clearGattCache(deviceIdArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              UniversalBlePigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.connectConnectionAttempt$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val deviceIdArg = args[0] as String
+            val attemptIdArg = args[1] as String
+            val autoConnectArg = args[2] as Boolean?
+            val platformConfigArg = args[3] as ConnectionPlatformConfig?
+            val wrapped: List<Any?> = try {
+              api.connectConnectionAttempt(deviceIdArg, attemptIdArg, autoConnectArg, platformConfigArg)
+              listOf(null)
+            } catch (exception: Throwable) {
+              UniversalBlePigeonUtils.wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.cancelConnectionAttempt$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val deviceIdArg = args[0] as String
+            val attemptIdArg = args[1] as String
+            val wrapped: List<Any?> = try {
+              api.cancelConnectionAttempt(deviceIdArg, attemptIdArg)
               listOf(null)
             } catch (exception: Throwable) {
               UniversalBlePigeonUtils.wrapError(exception)

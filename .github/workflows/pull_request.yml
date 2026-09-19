@@ -2,7 +2,7 @@ name: Pull Request
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/871-android-direct-connect-admission]
 
 jobs:
   test:

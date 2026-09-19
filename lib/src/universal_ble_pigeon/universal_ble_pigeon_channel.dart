@@ -84,6 +84,42 @@ class UniversalBlePigeonChannel extends UniversalBlePlatform
   );
 
   @override
+  Future<void> connectConnectionAttempt(
+    String deviceId,
+    String attemptId, {
+    Duration? connectionTimeout,
+    bool autoConnect = false,
+    ConnectionPlatformConfig? platformConfig,
+  }) {
+    final androidChannel = _androidChannel;
+    if (androidChannel == null) {
+      return connect(
+        deviceId,
+        connectionTimeout: connectionTimeout,
+        autoConnect: autoConnect,
+        platformConfig: platformConfig,
+      );
+    }
+    return _executeWithErrorHandling(
+      () => androidChannel.connectConnectionAttempt(
+        deviceId,
+        attemptId,
+        autoConnect: autoConnect,
+        platformConfig: platformConfig,
+      ),
+    );
+  }
+
+  @override
+  Future<void> cancelConnectionAttempt(String deviceId, String attemptId) {
+    final androidChannel = _androidChannel;
+    if (androidChannel == null) return disconnect(deviceId);
+    return _executeWithErrorHandling(
+      () => androidChannel.cancelConnectionAttempt(deviceId, attemptId),
+    );
+  }
+
+  @override
   Future<void> disconnect(String deviceId) =>
       _executeWithErrorHandling(() => _channel.disconnect(deviceId));
 

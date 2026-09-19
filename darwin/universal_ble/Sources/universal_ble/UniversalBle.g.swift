@@ -2265,6 +2265,8 @@ protocol UniversalBleAndroidChannel {
   /// BluetoothGatt#refresh() method. Remedy for stale service caches on
   /// misbehaving stacks or after peripheral firmware updates.
   func clearGattCache(deviceId: String) throws
+  func connectConnectionAttempt(deviceId: String, attemptId: String, autoConnect: Bool?, platformConfig: ConnectionPlatformConfig?) throws
+  func cancelConnectionAttempt(deviceId: String, attemptId: String) throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -2318,6 +2320,40 @@ class UniversalBleAndroidChannelSetup {
       }
     } else {
       clearGattCacheChannel.setMessageHandler(nil)
+    }
+    let connectConnectionAttemptChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.connectConnectionAttempt\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      connectConnectionAttemptChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let deviceIdArg = args[0] as! String
+        let attemptIdArg = args[1] as! String
+        let autoConnectArg: Bool? = nilOrValue(args[2])
+        let platformConfigArg: ConnectionPlatformConfig? = nilOrValue(args[3])
+        do {
+          try api.connectConnectionAttempt(deviceId: deviceIdArg, attemptId: attemptIdArg, autoConnect: autoConnectArg, platformConfig: platformConfigArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      connectConnectionAttemptChannel.setMessageHandler(nil)
+    }
+    let cancelConnectionAttemptChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.cancelConnectionAttempt\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      cancelConnectionAttemptChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let deviceIdArg = args[0] as! String
+        let attemptIdArg = args[1] as! String
+        do {
+          try api.cancelConnectionAttempt(deviceId: deviceIdArg, attemptId: attemptIdArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      cancelConnectionAttemptChannel.setMessageHandler(nil)
     }
   }
 }

@@ -12,6 +12,10 @@ enum QueueDiagnosticsState { running, faulted, notFound }
 
 /// Current payload-free diagnostics for one queue generation.
 class QueueDiagnostics {
+  final String? boundary;
+  final int? generation;
+  final List<String> activeOperationLabels;
+  final List<String> pendingOperationLabels;
   final String queueId;
   final QueueType queueType;
   final int pendingOperations;
@@ -21,6 +25,10 @@ class QueueDiagnostics {
   final QueueDiagnosticsState state;
 
   const QueueDiagnostics({
+    this.boundary,
+    this.generation,
+    this.activeOperationLabels = const [],
+    this.pendingOperationLabels = const [],
     required this.queueId,
     required this.queueType,
     required this.pendingOperations,

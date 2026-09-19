@@ -3631,6 +3631,78 @@ void UniversalBleAndroidChannel::SetUp(
       channel.SetMessageHandler(nullptr);
     }
   }
+  {
+    BasicMessageChannel<> channel(binary_messenger, "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.connectConnectionAttempt" + prepended_suffix, &GetCodec());
+    if (api != nullptr) {
+      channel.SetMessageHandler([api](const EncodableValue& message, const ::flutter::MessageReply<EncodableValue>& reply) {
+        try {
+          const auto& args = std::get<EncodableList>(message);
+          const auto& encodable_device_id_arg = args.at(0);
+          if (encodable_device_id_arg.IsNull()) {
+            reply(WrapError("device_id_arg unexpectedly null."));
+            return;
+          }
+          const auto& device_id_arg = std::get<std::string>(encodable_device_id_arg);
+          const auto& encodable_attempt_id_arg = args.at(1);
+          if (encodable_attempt_id_arg.IsNull()) {
+            reply(WrapError("attempt_id_arg unexpectedly null."));
+            return;
+          }
+          const auto& attempt_id_arg = std::get<std::string>(encodable_attempt_id_arg);
+          const auto& encodable_auto_connect_arg = args.at(2);
+          const auto* auto_connect_arg = std::get_if<bool>(&encodable_auto_connect_arg);
+          const auto& encodable_platform_config_arg = args.at(3);
+          const auto* platform_config_arg = encodable_platform_config_arg.IsNull() ? nullptr : &(std::any_cast<const ConnectionPlatformConfig&>(std::get<CustomEncodableValue>(encodable_platform_config_arg)));
+          std::optional<FlutterError> output = api->ConnectConnectionAttempt(device_id_arg, attempt_id_arg, auto_connect_arg, platform_config_arg);
+          if (output.has_value()) {
+            reply(WrapError(output.value()));
+            return;
+          }
+          EncodableList wrapped;
+          wrapped.push_back(EncodableValue());
+          reply(EncodableValue(std::move(wrapped)));
+        } catch (const std::exception& exception) {
+          reply(WrapError(exception.what()));
+        }
+      });
+    } else {
+      channel.SetMessageHandler(nullptr);
+    }
+  }
+  {
+    BasicMessageChannel<> channel(binary_messenger, "dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.cancelConnectionAttempt" + prepended_suffix, &GetCodec());
+    if (api != nullptr) {
+      channel.SetMessageHandler([api](const EncodableValue& message, const ::flutter::MessageReply<EncodableValue>& reply) {
+        try {
+          const auto& args = std::get<EncodableList>(message);
+          const auto& encodable_device_id_arg = args.at(0);
+          if (encodable_device_id_arg.IsNull()) {
+            reply(WrapError("device_id_arg unexpectedly null."));
+            return;
+          }
+          const auto& device_id_arg = std::get<std::string>(encodable_device_id_arg);
+          const auto& encodable_attempt_id_arg = args.at(1);
+          if (encodable_attempt_id_arg.IsNull()) {
+            reply(WrapError("attempt_id_arg unexpectedly null."));
+            return;
+          }
+          const auto& attempt_id_arg = std::get<std::string>(encodable_attempt_id_arg);
+          std::optional<FlutterError> output = api->CancelConnectionAttempt(device_id_arg, attempt_id_arg);
+          if (output.has_value()) {
+            reply(WrapError(output.value()));
+            return;
+          }
+          EncodableList wrapped;
+          wrapped.push_back(EncodableValue());
+          reply(EncodableValue(std::move(wrapped)));
+        } catch (const std::exception& exception) {
+          reply(WrapError(exception.what()));
+        }
+      });
+    } else {
+      channel.SetMessageHandler(nullptr);
+    }
+  }
 }
 
 EncodableValue UniversalBleAndroidChannel::WrapError(std::string_view error_message) {
