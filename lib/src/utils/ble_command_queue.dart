@@ -6,6 +6,7 @@ class BleCommandQueue {
   QueueType queueType;
   Duration? timeout = const Duration(seconds: 10);
   OnQueueUpdate? onQueueUpdate;
+  void Function(QueueDiagnostics)? onQueueBoundary;
   final Map<String, ({Queue queue, QueueType type})> _queueMap = {};
   final Map<String, int> _holds = {};
   int _lastHoldToken = 0;
@@ -19,6 +20,7 @@ class BleCommandQueue {
     Duration? timeout,
     String? queueId,
     String? coalesceKey,
+    String diagnosticLabel = 'unspecified',
   }) {
     Duration? timeoutDuration = timeout ?? this.timeout;
     if (timeoutDuration == null) {
@@ -27,19 +29,16 @@ class BleCommandQueue {
         deviceId: deviceId,
         queueId: queueId,
         coalesceKey: coalesceKey,
+        diagnosticLabel: diagnosticLabel,
       );
     }
     return switch (queueType) {
-      QueueType.global => _queue(queueId).add(
-        command,
-        timeoutDuration,
-        coalesceKey,
-      ),
-      QueueType.perDevice => _queue(queueId ?? deviceId?.toLowerCase()).add(
-        command,
-        timeoutDuration,
-        coalesceKey,
-      ),
+      QueueType.global => _queue(
+        queueId,
+      ).add(command, timeoutDuration, coalesceKey, diagnosticLabel),
+      QueueType.perDevice => _queue(
+        queueId ?? deviceId?.toLowerCase(),
+      ).add(command, timeoutDuration, coalesceKey, diagnosticLabel),
       QueueType.none => command().timeout(timeoutDuration),
     };
   }
@@ -49,18 +48,15 @@ class BleCommandQueue {
     String? deviceId,
     String? queueId,
     String? coalesceKey,
+    String diagnosticLabel = 'unspecified',
   }) {
     return switch (queueType) {
-      QueueType.global => _queue(queueId).add(
-        command,
-        null,
-        coalesceKey,
-      ),
-      QueueType.perDevice => _queue(queueId ?? deviceId?.toLowerCase()).add(
-        command,
-        null,
-        coalesceKey,
-      ),
+      QueueType.global => _queue(
+        queueId,
+      ).add(command, null, coalesceKey, diagnosticLabel),
+      QueueType.perDevice => _queue(
+        queueId ?? deviceId?.toLowerCase(),
+      ).add(command, null, coalesceKey, diagnosticLabel),
       QueueType.none => command(),
     };
   }
@@ -114,6 +110,8 @@ class BleCommandQueue {
     };
     if (_holds.containsKey(id)) queue.pause();
     _queueMap[id] = (queue: queue, type: queueType);
+    final type = queueType;
+    queue.onFault = () => _reportBoundary(id, queue, type, 'timeout');
     return queue;
   }
 
@@ -129,15 +127,37 @@ class BleCommandQueue {
         state: QueueDiagnosticsState.notFound,
       );
     }
-    return QueueDiagnostics(
-      queueId: queueKey,
-      queueType: entry.type,
-      pendingOperations: entry.queue.pendingOperations,
-      activeOperations: entry.queue.activeOperations,
-      state: entry.queue.isFaulted
-          ? QueueDiagnosticsState.faulted
-          : QueueDiagnosticsState.running,
-    );
+    return _snapshot(queueKey, entry.queue, entry.type);
+  }
+
+  QueueDiagnostics _snapshot(
+    String id,
+    Queue queue,
+    QueueType type, [
+    String? boundary,
+  ]) => QueueDiagnostics(
+    boundary: boundary,
+    generation: queue.generation,
+    activeOperationLabels: queue.activeOperationLabels,
+    pendingOperationLabels: queue.pendingOperationLabels,
+    queueId: id,
+    queueType: type,
+    pendingOperations: queue.pendingOperations,
+    activeOperations: queue.activeOperations,
+    state: queue.isFaulted
+        ? QueueDiagnosticsState.faulted
+        : QueueDiagnosticsState.running,
+  );
+
+  void _reportBoundary(
+    String id,
+    Queue queue,
+    QueueType type,
+    String boundary,
+  ) {
+    try {
+      onQueueBoundary?.call(_snapshot(id, queue, type, boundary));
+    } catch (_) {}
   }
 
   QueueClearSummary clearQueue(String? id, {Object? error}) {
@@ -201,6 +221,14 @@ class BleCommandQueue {
     UniversalBleErrorCode? errorCode,
     Object? error,
   ) {
+    if (queue.activeOperations != 0 || queue.pendingOperations != 0) {
+      _reportBoundary(
+        queueId,
+        queue,
+        queueType,
+        'clear/${errorCode?.name ?? reason.name}',
+      );
+    }
     final result = queue.dispose(error);
     return QueueClearResult(
       queueId: queueId,

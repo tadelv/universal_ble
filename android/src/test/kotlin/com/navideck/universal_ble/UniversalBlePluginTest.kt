@@ -25,6 +25,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyList
+import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.eq
 import org.mockito.ArgumentMatchers.isNull
 import org.mockito.Mockito.doAnswer
@@ -38,6 +39,20 @@ import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 
 internal class UniversalBlePluginTest {
+    @Test
+    fun recoveryBlockRemainsTheLeadingConnectionFailureType() {
+        assertEquals(
+            "RECOVERY_BLOCKED: unresolved native GATT teardown",
+            connectionStartFailureDescription(
+                IllegalStateException("RECOVERY_BLOCKED: unresolved native GATT teardown")
+            ),
+        )
+        assertEquals(
+            "CONNECT_START_FAILED: connectGatt failed",
+            connectionStartFailureDescription(IllegalStateException("connectGatt failed")),
+        )
+    }
+
     @Test
     fun missingScannerFailsStartScan() {
         val plugin = scanPlugin(null)
@@ -92,21 +107,31 @@ internal class UniversalBlePluginTest {
         val deviceId = "AA:BB:CC:DD:EE:FF"
         val pendingConnects = plugin.field<MutableMap<String, Runnable>>("pendingConnects")
         val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
 
         plugin.setField("mainThreadHandler", handler)
         pendingConnects[deviceId.connectionKey()] = pendingConnect
         disconnectTimestamps[deviceId.connectionKey()] = 1L
+        ownedGatts[gatt] = Unit
         `when`(gatt.device).thenReturn(device)
         `when`(device.address).thenReturn(deviceId)
         gatt.saveCacheIfNeeded()
 
         try {
-            plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                plugin.onConnectionStateChange(
+                    gatt,
+                    BluetoothGatt.GATT_SUCCESS,
+                    BluetoothGatt.STATE_CONNECTED,
+                )
+            }
 
             verify(handler).removeCallbacks(pendingConnect)
             assertFalse(pendingConnects.containsKey(deviceId.connectionKey()))
             assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
         } finally {
+            ownedGatts.remove(gatt)
             gatt.removeCacheIfCurrent()
         }
     }
@@ -221,6 +246,7 @@ internal class UniversalBlePluginTest {
         plugin.setField("mainThreadHandler", handler)
         plugin.setField("bluetoothManager", manager)
         plugin.setField("context", context)
+        `when`(handler.postDelayed(any(Runnable::class.java), anyLong())).thenReturn(true)
         `when`(manager.adapter).thenReturn(adapter)
         `when`(adapter.isEnabled).thenReturn(true)
         `when`(adapter.getRemoteDevice(deviceId)).thenReturn(device)
@@ -230,13 +256,14 @@ internal class UniversalBlePluginTest {
 
         mockStatic(SystemClock::class.java).use { clock ->
             clock.`when`<Long> { SystemClock.elapsedRealtime() }
-                .thenReturn(1_000L, 1_000L, 1_500L)
+                .thenReturn(1_000L, 1_000L, 1_000L, 1_500L)
             plugin.connect(deviceId, false, null)
             plugin.disconnect(deviceId.lowercase())
         }
 
         try {
             assertEquals(1_000L, connectTimestamps[deviceId.connectionKey()])
+            verify(handler).postDelayed(any(Runnable::class.java), eq(3_500L))
             verify(handler).postDelayed(any(Runnable::class.java), eq(1_500L))
             verify(gatt, never()).disconnect()
         } finally {

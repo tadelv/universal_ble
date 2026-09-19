@@ -6,6 +6,83 @@ import 'package:universal_ble/universal_ble.dart';
 
 void main() {
   group('BleCommandQueue', () {
+    test(
+      'diagnostics identify queue generations and bounded operation labels',
+      () async {
+        final queue = BleCommandQueue(queueType: QueueType.perDevice);
+        final release = Completer<void>();
+        final active = queue.queueCommand(
+          () => release.future,
+          deviceId: 'peer',
+          diagnosticLabel: 'read/service/characteristic',
+        );
+        final pending = List.generate(
+          40,
+          (index) => queue.queueCommand(
+            () async {},
+            deviceId: 'peer',
+            diagnosticLabel: 'write/service/characteristic-$index',
+          ),
+        );
+        final snapshot = queue.getQueueDiagnostics('peer');
+        expect(snapshot.generation, isNotNull);
+        expect(snapshot.activeOperationLabels, ['read/service/characteristic']);
+        expect(snapshot.pendingOperations, 40);
+        expect(
+          snapshot.pendingOperationLabels,
+          List.generate(32, (index) => 'write/service/characteristic-$index'),
+        );
+        release.complete();
+        await Future.wait([active, ...pending]);
+        expect(
+          queue.getQueueDiagnostics('peer').activeOperationLabels,
+          isEmpty,
+        );
+        queue.clearQueue('peer');
+        expect(queue.getQueueDiagnostics('peer').generation, isNull);
+        await queue.queueCommand(() async {}, deviceId: 'peer');
+        expect(
+          queue.getQueueDiagnostics('peer').generation,
+          isNot(snapshot.generation),
+        );
+      },
+    );
+    test('faulted diagnostics retain the unresolved operation label', () async {
+      final queue = BleCommandQueue(queueType: QueueType.perDevice);
+      final boundaries = <QueueDiagnostics>[];
+      queue.onQueueBoundary = boundaries.add;
+      final release = Completer<void>();
+      final active = queue.queueCommand(
+        () => release.future,
+        deviceId: 'peer',
+        timeout: const Duration(milliseconds: 10),
+        diagnosticLabel: 'requestMtu',
+      );
+      final pending = queue.queueCommand(
+        () async {},
+        deviceId: 'peer',
+        diagnosticLabel: 'write/service/characteristic',
+      );
+      final cancelled = expectLater(
+        pending,
+        throwsA(isA<UniversalBleException>()),
+      );
+      await expectLater(active, throwsA(isA<TimeoutException>()));
+      await cancelled;
+      expect(boundaries.single.boundary, 'timeout');
+      expect(boundaries.single.pendingOperationLabels, [
+        'write/service/characteristic',
+      ]);
+      expect(boundaries.single.activeOperationLabels, ['requestMtu']);
+      expect(boundaries.single.pendingOperations, 1);
+      final faulted = queue.getQueueDiagnostics('peer');
+      expect(faulted.state, QueueDiagnosticsState.faulted);
+      expect(faulted.activeOperationLabels, ['requestMtu']);
+      release.complete();
+      await pumpEventQueue();
+      expect(queue.getQueueDiagnostics('peer').activeOperationLabels, isEmpty);
+      expect(boundaries.single.activeOperationLabels, ['requestMtu']);
+    });
     test('global queue executes commands sequentially', () async {
       final commandQueue = BleCommandQueue();
       final order = <int>[];

@@ -18,6 +18,7 @@ internal class AndroidDirectConnectQueue(
         internal val deviceKey: String,
         val generation: Long,
         val epoch: Long,
+        val requestId: String?,
         internal val start: (Attempt) -> Unit,
     ) {
         internal var nativeOwner: Any? = null
@@ -81,7 +82,11 @@ internal class AndroidDirectConnectQueue(
         return active?.deviceKey == key || pending.any { it.deviceKey == key }
     }
 
-    fun enqueue(deviceId: String, start: (Attempt) -> Unit): Attempt {
+    fun enqueue(
+        deviceId: String,
+        requestId: String? = null,
+        start: (Attempt) -> Unit,
+    ): Attempt {
         val key = key(deviceId)
         check(!contains(key)) { "Connection already scheduled for $deviceId" }
         val attempt = Attempt(
@@ -89,6 +94,7 @@ internal class AndroidDirectConnectQueue(
             deviceKey = key,
             generation = ++nextGeneration,
             epoch = currentEpoch,
+            requestId = requestId,
             start = start,
         )
         pending.add(attempt)
@@ -99,6 +105,9 @@ internal class AndroidDirectConnectQueue(
     /** True while this exact attempt still owns the admission lane and is allowed to proceed. */
     fun isActive(attempt: Attempt): Boolean =
         active === attempt && attempt.state in setOf(AttemptState.ADMITTED, AttemptState.NATIVE_PENDING)
+
+    /** True only when [nativeOwner] is the exact native client currently holding admission. */
+    fun owns(nativeOwner: Any): Boolean = active?.nativeOwner === nativeOwner
 
     fun bind(attempt: Attempt, nativeOwner: Any) {
         check(active === attempt && attempt.epoch == currentEpoch) {
@@ -168,6 +177,16 @@ internal class AndroidDirectConnectQueue(
         cancel(attempt)
     }
 
+    fun cancel(deviceId: String, requestId: String): Attempt? {
+        val deviceKey = key(deviceId)
+        val attempt = pending.firstOrNull {
+            it.deviceKey == deviceKey && it.requestId == requestId
+        } ?: active?.takeIf {
+            it.deviceKey == deviceKey && it.requestId == requestId
+        } ?: return null
+        return if (cancel(attempt)) attempt else null
+    }
+
     /**
      * Cancel only [attempt]. This is the generation-safe seam for caller deadlines.
      * A stale timeout cannot cancel a newer same-address attempt through this overload.
@@ -189,6 +208,19 @@ internal class AndroidDirectConnectQueue(
             startNext()
         }
         return true
+    }
+
+    /**
+     * Cancel only requests that have not acquired the admission lane yet.
+     *
+     * Used when native teardown becomes recovery-blocked: callers waiting behind the unresolved
+     * owner must fail promptly, while the exact active native owner remains fenced in place.
+     */
+    fun cancelPending(): List<Attempt> {
+        val cancelled = pending.toList()
+        pending.clear()
+        cancelled.forEach { it.beginCancellation() }
+        return cancelled
     }
 
     /**

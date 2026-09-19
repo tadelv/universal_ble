@@ -12,6 +12,9 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
   final Map<String, Completer<void>> writeBlockers = {};
 
   final List<String> disconnectCalls = [];
+  final List<({String deviceId, String attemptId})> cancelledConnects = [];
+  final List<({String deviceId, String attemptId})> startedConnects = [];
+  bool rejectDuplicateConnects = false;
   final List<String> startedWrites = [];
   final List<Completer<void>> writeStartMarkers = [];
   final List<({String deviceId, String characteristic})> completedWrites = [];
@@ -41,6 +44,33 @@ class _QueueDrainMockPlatform extends UniversalBlePlatformMock {
     ConnectionPlatformConfig? platformConfig,
   }) async {
     // Never completes the connection — simulates a hung connect attempt.
+  }
+
+  @override
+  Future<void> connectConnectionAttempt(
+    String deviceId,
+    String attemptId, {
+    Duration? connectionTimeout,
+    bool autoConnect = false,
+    ConnectionPlatformConfig? platformConfig,
+  }) async {
+    if (rejectDuplicateConnects &&
+        startedConnects.any(
+          (attempt) =>
+              attempt.deviceId.toLowerCase() == deviceId.toLowerCase(),
+        )) {
+      throw StateError('connection already pending');
+    }
+    startedConnects.add((deviceId: deviceId, attemptId: attemptId));
+  }
+
+  @override
+  Future<void> cancelConnectionAttempt(
+    String deviceId,
+    String attemptId,
+  ) async {
+    cancelledConnects.add((deviceId: deviceId, attemptId: attemptId));
+    disconnectDevice(deviceId);
   }
 
   @override
@@ -661,6 +691,58 @@ void main() {
   });
 
   group('connect timeout', () {
+    test('auto-connect timeout falls back to device disconnect', () async {
+      await expectLater(
+        UniversalBle.connect(
+          'device-a',
+          autoConnect: true,
+          timeout: const Duration(milliseconds: 5),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+
+      expect(mock.disconnectCalls, ['device-a']);
+      expect(mock.cancelledConnects, isEmpty);
+    });
+
+    test('explicit cancellation targets the active attempt', () async {
+      final connecting = UniversalBle.connect(
+        'device-a',
+        timeout: const Duration(seconds: 5),
+      );
+      await pumpEventQueue();
+
+      await UniversalBle.cancelConnectionAttempt('device-a');
+
+      await expectLater(connecting, throwsA(isA<ConnectionException>()));
+      expect(mock.cancelledConnects, hasLength(1));
+      expect(
+        mock.cancelledConnects.single.attemptId,
+        mock.startedConnects.single.attemptId,
+      );
+    });
+
+    test('rejected duplicate preserves the active cancellation target', () async {
+      mock.rejectDuplicateConnects = true;
+      final first = UniversalBle.connect(
+        'device-a',
+        timeout: const Duration(seconds: 5),
+      );
+      await pumpEventQueue();
+
+      await expectLater(
+        UniversalBle.connect('DEVICE-A'),
+        throwsA(isA<ConnectionException>()),
+      );
+      await UniversalBle.cancelConnectionAttempt('device-a');
+
+      await expectLater(first, throwsA(isA<ConnectionException>()));
+      expect(
+        mock.cancelledConnects.single.attemptId,
+        mock.startedConnects.single.attemptId,
+      );
+    });
+
     test('cancels the pending native connect attempt', () async {
       await expectLater(
         UniversalBle.connect(
@@ -672,7 +754,13 @@ void main() {
 
       // The timed-out attempt must be cancelled natively, otherwise the OS
       // can complete it later with nobody listening (zombie link).
-      expect(mock.disconnectCalls, ['device-a']);
+      expect(mock.cancelledConnects, hasLength(1));
+      expect(mock.cancelledConnects.single.deviceId, 'device-a');
+      expect(
+        mock.cancelledConnects.single.attemptId,
+        mock.startedConnects.single.attemptId,
+      );
+      expect(mock.disconnectCalls, isEmpty);
     });
   });
 

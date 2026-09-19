@@ -72,6 +72,22 @@ abstract class UniversalBlePlatform {
     ConnectionPlatformConfig? platformConfig,
   });
 
+  Future<void> connectConnectionAttempt(
+    String deviceId,
+    String attemptId, {
+    Duration? connectionTimeout,
+    bool autoConnect = false,
+    ConnectionPlatformConfig? platformConfig,
+  }) => connect(
+    deviceId,
+    connectionTimeout: connectionTimeout,
+    autoConnect: autoConnect,
+    platformConfig: platformConfig,
+  );
+
+  Future<void> cancelConnectionAttempt(String deviceId, String attemptId) =>
+      disconnect(deviceId);
+
   Future<void> disconnect(String deviceId);
 
   Future<List<BleService>> discoverServices(

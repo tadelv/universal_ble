@@ -528,6 +528,15 @@ abstract class UniversalBleAndroidChannel {
   /// BluetoothGatt#refresh() method. Remedy for stale service caches on
   /// misbehaving stacks or after peripheral firmware updates.
   void clearGattCache(String deviceId);
+
+  void connectConnectionAttempt(
+    String deviceId,
+    String attemptId, {
+    bool? autoConnect,
+    ConnectionPlatformConfig? platformConfig,
+  });
+
+  void cancelConnectionAttempt(String deviceId, String attemptId);
 }
 
 /// Native -> Flutter (peripheral)

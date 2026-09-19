@@ -2569,6 +2569,54 @@ class UniversalBleAndroidChannel {
       isNullValid: true,
     );
   }
+
+  Future<void> connectConnectionAttempt(
+    String deviceId,
+    String attemptId, {
+    bool? autoConnect,
+    ConnectionPlatformConfig? platformConfig,
+  }) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.connectConnectionAttempt$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[deviceId, attemptId, autoConnect, platformConfig],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
+  }
+
+  Future<void> cancelConnectionAttempt(
+    String deviceId,
+    String attemptId,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.universal_ble.UniversalBleAndroidChannel.cancelConnectionAttempt$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[deviceId, attemptId],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
+  }
 }
 
 /// Native -> Flutter (peripheral)
