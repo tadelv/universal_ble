@@ -168,6 +168,81 @@ internal class UniversalBlePluginTest {
     }
 
     @Test
+    fun failedConnectedNotificationDoesNotAffectReplacementInstalledBeforeDelivery() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val failedGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+        val postedTasks = mutableListOf<Runnable>()
+
+        doAnswer {
+            postedTasks.add(it.arguments[0] as Runnable)
+            true
+        }.`when`(handler).post(any(Runnable::class.java))
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(failedGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        failedGatt.saveCacheIfNeeded()
+        ownedGatts[failedGatt] = Unit
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                plugin.onConnectionStateChange(failedGatt, 133, BluetoothGatt.STATE_CONNECTED)
+                postedTasks.removeAt(0).run()
+                replacementGatt.saveCacheIfNeeded()
+                postedTasks.removeAt(0).run()
+            }
+
+            assertSame(replacementGatt, deviceId.findGatt())
+            assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+            verifyNoMoreInteractions(callbackChannel)
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun failedConnectedCallbackRetainsGattWhenCloseThrows() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val failedGatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(failedGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        doThrow(IllegalStateException("close failed")).`when`(failedGatt).close()
+        failedGatt.saveCacheIfNeeded()
+        ownedGatts[failedGatt] = Unit
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                mockStatic(Log::class.java).use {
+                    plugin.onConnectionStateChange(failedGatt, 133, BluetoothGatt.STATE_CONNECTED)
+                }
+            }
+
+            assertSame(failedGatt, deviceId.findGatt())
+            assertTrue(ownedGatts.containsKey(failedGatt))
+        } finally {
+            failedGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
     fun staleFailedConnectedCallbackDoesNotRetireSameAddressReplacement() {
         val plugin = UniversalBlePlugin()
         val handler = handler(runPostedTasks = true)

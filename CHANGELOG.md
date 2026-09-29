@@ -1,5 +1,6 @@
 ## Unreleased
 
+* Android: reject a STATE_CONNECTED callback whose GATT status is not success instead of publishing a connection.
 * Windows: cancel pending connection attempts before they can publish a late connection.
 * Windows: release scan watchers, connection callbacks, and GATT resources when the plugin is destroyed.
 * Android: close central GATT resources and unregister the host channel when the Flutter engine detaches.
