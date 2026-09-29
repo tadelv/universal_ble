@@ -10,6 +10,7 @@ import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.SystemClock
 import android.util.Log
@@ -201,6 +202,89 @@ internal class UniversalBlePluginTest {
                 postedTasks.removeAt(0).run()
                 replacementGatt.saveCacheIfNeeded()
                 postedTasks.removeAt(0).run()
+            }
+
+            assertSame(replacementGatt, deviceId.findGatt())
+            assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+            verifyNoMoreInteractions(callbackChannel)
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun cleanConnectionNotificationDoesNotAffectReplacementInstalledBeforeDelivery() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val manager = mock(BluetoothManager::class.java)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val staleGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+        val postedTasks = mutableListOf<Runnable>()
+
+        doAnswer {
+            postedTasks.add(it.arguments[0] as Runnable)
+            true
+        }.`when`(handler).post(any(Runnable::class.java))
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(staleGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        staleGatt.saveCacheIfNeeded()
+
+        try {
+            plugin.javaClass.getDeclaredMethod("cleanConnection", BluetoothGatt::class.java)
+                .apply { isAccessible = true }.invoke(plugin, staleGatt)
+            replacementGatt.saveCacheIfNeeded()
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                postedTasks.single().run()
+            }
+
+            assertSame(replacementGatt, deviceId.findGatt())
+            assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+            verifyNoMoreInteractions(callbackChannel)
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun disconnectedCallbackNotificationDoesNotAffectReplacementInstalledBeforeDelivery() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val staleGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+        val postedTasks = mutableListOf<Runnable>()
+
+        doAnswer {
+            postedTasks.add(it.arguments[0] as Runnable)
+            true
+        }.`when`(handler).post(any(Runnable::class.java))
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(staleGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        staleGatt.saveCacheIfNeeded()
+
+        try {
+            plugin.onConnectionStateChange(staleGatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_DISCONNECTED)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) postedTasks.removeAt(0).run()
+            assertEquals(1, postedTasks.size)
+            replacementGatt.saveCacheIfNeeded()
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                postedTasks.forEach { it.run() }
             }
 
             assertSame(replacementGatt, deviceId.findGatt())

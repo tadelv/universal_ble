@@ -1450,7 +1450,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         if (state != BluetoothProfile.STATE_CONNECTED) {
             connectTimestamps.remove(deviceId.connectionKey())
             val closed = closeGatt(gatt)
-            notifyDisconnected(deviceId, if (closed) null else "GATT_CLOSE_FAILED")
+            notifyDisconnected(deviceId, if (closed) null else "GATT_CLOSE_FAILED", expectedGatt = gatt)
         }
     }
 
@@ -1680,10 +1680,11 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                     val closed = closeGatt(gatt)
                     notifyDisconnected(
                         deviceId,
-                        if (closed) status.parseHciErrorCode() else "GATT_CLOSE_FAILED"
+                        if (closed) status.parseHciErrorCode() else "GATT_CLOSE_FAILED",
+                        expectedGatt = gatt,
                     )
                 } else {
-                    notifyDisconnected(deviceId, status.parseHciErrorCode())
+                    notifyDisconnected(deviceId, status.parseHciErrorCode(), expectedGatt = gatt)
                 }
             // When autoConnect is enabled, keep GATT open for Android to reconnect
             }
