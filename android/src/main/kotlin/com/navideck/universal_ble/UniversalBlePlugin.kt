@@ -1460,8 +1460,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         gatt.close()
     }
 
-    private fun notifyDisconnected(deviceId: String, error: String?) {
+    private fun notifyDisconnected(
+        deviceId: String,
+        error: String?,
+        expectedGatt: BluetoothGatt? = null,
+    ) {
         mainThreadHandler?.post {
+            if (expectedGatt != null && deviceId.findGatt()?.let { it !== expectedGatt } == true) {
+                return@post
+            }
             disconnectTimestamps[deviceId.connectionKey()] = SystemClock.elapsedRealtime()
             callbackChannel?.onConnectionChanged(deviceId, false, error) {}
         }
@@ -1636,10 +1643,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                     autoConnectDevices.remove(connectionKey)
                     connectTimestamps.remove(connectionKey)
                     cleanUpConnection(gatt)
-                    notifyDisconnected(deviceId, status.parseHciErrorCode())
-                    gatt.removeCacheIfCurrent()
+                    notifyDisconnected(deviceId, status.parseHciErrorCode(), gatt)
                     gatt.disconnect()
-                    closeGatt(gatt)
+                    try {
+                        gatt.close()
+                        gatt.removeCacheIfCurrent()
+                        ownedGatts.remove(gatt)
+                    } catch (e: Exception) {
+                        UniversalBleLogger.logError("Failed to close gatt for $deviceId: $e")
+                    }
                     return@completeGattCallback
                 }
                 pendingConnects.remove(connectionKey)?.let { mainThreadHandler?.removeCallbacks(it) }
