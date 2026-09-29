@@ -601,6 +601,290 @@ internal class UniversalBlePluginTest {
     }
 
     @Test
+    fun explicitEstablishedDisconnectClosesGattWhenCallbackIsMissing() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val gatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        var fallback: Runnable? = null
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        plugin.setField("bluetoothManager", manager)
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[gatt] = Unit
+        plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()] = 1L
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
+            .thenAnswer {
+                fallback = it.arguments[0] as Runnable
+                true
+            }
+        gatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+
+            assertTrue(fallback != null, "established disconnect should schedule a bounded fallback")
+            verify(handler).postDelayed(eq(fallback!!), eq(2_000L))
+            verify(gatt).disconnect()
+            verify(gatt, never()).close()
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(7_000L)
+                fallback!!.run()
+            }
+            verify(gatt).close()
+            assertNull(deviceId.findGatt())
+            assertEquals(listOf(Triple(deviceId, false, "DISCONNECT_CALLBACK_TIMEOUT")),
+                mockingDetails(callbackChannel).invocations
+                    .filter { it.method.name == "onConnectionChanged" }
+                    .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) })
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun explicitDisconnectFallbackRetainsGattWhenCloseThrowsAndReportsCloseFailure() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val gatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        var fallback: Runnable? = null
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        plugin.setField("bluetoothManager", manager)
+        ownedGatts[gatt] = Unit
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
+            .thenAnswer { fallback = it.arguments[0] as Runnable; true }
+        doThrow(IllegalStateException("close failed")).`when`(gatt).close()
+        gatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(7_000L)
+                fallback!!.run()
+            }
+
+            assertSame(gatt, deviceId.findGatt())
+            assertTrue(ownedGatts.containsKey(gatt))
+            val events = mockingDetails(callbackChannel).invocations
+                .filter { it.method.name == "onConnectionChanged" }
+                .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) }
+            assertEquals(listOf(Triple(deviceId, false, "GATT_CLOSE_FAILED")), events)
+            plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
+            assertEquals(listOf(Triple(deviceId, false, "GATT_CLOSE_FAILED")),
+                mockingDetails(callbackChannel).invocations
+                    .filter { it.method.name == "onConnectionChanged" }
+                    .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) })
+            assertTrue(ownedGatts.containsKey(gatt))
+            verify(gatt).close()
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun explicitDisconnectCallbackCancelsFallback() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val gatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        var fallback: Runnable? = null
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[gatt] = Unit
+        plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()] = 1L
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
+            .thenAnswer {
+                fallback = it.arguments[0] as Runnable
+                true
+            }
+        gatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(6_000L)
+                plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_DISCONNECTED)
+            }
+
+            verify(handler).removeCallbacks(fallback!!)
+            assertFalse(plugin.field<IdentityHashMap<BluetoothGatt, Runnable>>("pendingDisconnectFallbacks")
+                .containsKey(gatt))
+            fallback!!.run()
+            verify(gatt, times(1)).close()
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun staleDisconnectFallbackClosesOnlyOriginalAndIgnoresLateConnectedCallback() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val originalGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        var fallback: Runnable? = null
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[originalGatt] = Unit
+        plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()] = 1L
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(originalGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
+            .thenAnswer {
+                fallback = it.arguments[0] as Runnable
+                true
+            }
+        originalGatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+            val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+            disconnectTimestamps[deviceId.connectionKey()] = 99L
+            plugin.onConnectionStateChange(originalGatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_CONNECTED)
+            assertEquals(99L, disconnectTimestamps[deviceId.connectionKey()])
+            assertTrue(plugin.field<IdentityHashMap<BluetoothGatt, Runnable>>("pendingDisconnectFallbacks")
+                .containsKey(originalGatt))
+            replacementGatt.saveCacheIfNeeded()
+            plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()] = 8_000L
+            fallback!!.run()
+
+            assertEquals(8_000L, plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()])
+            verify(originalGatt).close()
+            verify(replacementGatt, never()).close()
+            assertSame(replacementGatt, deviceId.findGatt())
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
+            originalGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun replacementBeforeTimeoutNotificationDoesNotReceiveOldDisconnect() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val originalGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        var fallback: Runnable? = null
+        var notification: Runnable? = null
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[originalGatt] = Unit
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(originalGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
+            .thenAnswer { fallback = it.arguments[0] as Runnable; true }
+        `when`(handler.post(any(Runnable::class.java))).thenAnswer {
+            notification = it.arguments[0] as Runnable
+            true
+        }
+        originalGatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+            fallback!!.run()
+            assertTrue(notification != null)
+            replacementGatt.saveCacheIfNeeded()
+            plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()] = 8_000L
+            notification!!.run()
+
+            assertEquals(8_000L, plugin.field<MutableMap<String, Long>>("connectTimestamps")[deviceId.connectionKey()])
+            assertFalse(plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
+                .containsKey(deviceId.connectionKey()))
+            assertSame(replacementGatt, deviceId.findGatt())
+            verify(replacementGatt, never()).close()
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
+            originalGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun failedFallbackSchedulingClosesOriginalImmediately() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler()
+        val manager = mock(BluetoothManager::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val gatt = mock(BluetoothGatt::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("bluetoothManager", manager)
+        plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")[gatt] = Unit
+        `when`(manager.getConnectionState(device, BluetoothProfile.GATT))
+            .thenReturn(BluetoothProfile.STATE_CONNECTED)
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        gatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(5_000L)
+                plugin.disconnect(deviceId)
+            }
+            verify(gatt).close()
+            assertNull(deviceId.findGatt())
+            assertTrue(plugin.field<IdentityHashMap<BluetoothGatt, Runnable>>("pendingDisconnectFallbacks")
+                .isEmpty())
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
     fun nativeDisconnectRemovesMixedCaseConnectTimestamp() {
         val plugin = UniversalBlePlugin()
         val handler = handler(runPostedTasks = true)

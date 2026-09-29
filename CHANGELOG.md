@@ -1,5 +1,6 @@
 ## Unreleased
 
+* Android: bound explicit disconnect completion with an exact-GATT fallback, preserving GATT ownership and cache when close fails.
 * Android: reject a STATE_CONNECTED callback whose GATT status is not success instead of publishing a connection.
 * Android: prevent delayed disconnect notifications from a closed GATT from affecting a replacement connection to the same device.
 * Windows: cancel pending connection attempts before they can publish a late connection.
