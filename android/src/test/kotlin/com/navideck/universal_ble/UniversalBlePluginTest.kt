@@ -15,6 +15,8 @@ import android.os.SystemClock
 import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import io.flutter.plugin.common.StandardMessageCodec
+import java.nio.ByteBuffer
 import java.util.IdentityHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -366,6 +368,114 @@ internal class UniversalBlePluginTest {
         } finally {
             ownedGatt.removeCacheIfCurrent()
             otherGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun failedCloseKeepsExactOwnerUntilLaterCleanupSucceeds() {
+        val plugin = UniversalBlePlugin()
+        val gatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val owned = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        doThrow(IllegalStateException("close failed")).doNothing().`when`(gatt).close()
+        owned[gatt] = Unit
+        gatt.saveCacheIfNeeded()
+
+        try {
+            plugin.invoke("cleanUpOnAdapterOff")
+            assertSame(gatt, deviceId.findGatt())
+            assertTrue(owned.containsKey(gatt))
+            assertEquals(1, owned.size)
+
+            plugin.invoke("cleanUpOnAdapterOff")
+            assertNull(deviceId.findGatt())
+            assertFalse(owned.containsKey(gatt))
+            assertEquals(0, owned.size)
+            plugin.invoke("cleanUpOnAdapterOff")
+            verify(gatt, times(2)).close()
+            assertEquals(0, owned.size)
+        } finally {
+            gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun staleOwnerCleanupNeverRemovesSameAddressReplacement() {
+        val plugin = UniversalBlePlugin()
+        val stale = mock(BluetoothGatt::class.java)
+        val replacement = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val owned = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+        `when`(stale.device).thenReturn(device)
+        `when`(replacement.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        doThrow(IllegalStateException("close failed")).doNothing().`when`(stale).close()
+        owned[stale] = Unit
+        stale.saveCacheIfNeeded()
+        replacement.saveCacheIfNeeded()
+
+        try {
+            plugin.invoke("cleanUpOnAdapterOff")
+            assertSame(replacement, deviceId.findGatt())
+            assertTrue(owned.containsKey(stale))
+            assertEquals(1, owned.size)
+
+            plugin.invoke("cleanUpOnAdapterOff")
+            assertSame(replacement, deviceId.findGatt())
+            assertFalse(owned.containsKey(stale))
+            assertEquals(0, owned.size)
+            verify(stale, times(2)).close()
+            verify(replacement, never()).close()
+        } finally {
+            replacement.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun failedCloseDoesNotReportSuccessfulTeardown() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val messenger = mock(BinaryMessenger::class.java)
+        val messages = mutableListOf<List<*>>()
+        val gatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val owned = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+        `when`(gatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        doThrow(IllegalStateException("close failed")).`when`(gatt).close()
+        plugin.setField("mainThreadHandler", handler)
+        doAnswer {
+            val buffer = it.arguments[1] as ByteBuffer
+            buffer.flip()
+            messages.add(StandardMessageCodec.INSTANCE.decodeMessage(buffer) as List<*>)
+            null
+        }.`when`(messenger).send(
+            eq("dev.flutter.pigeon.universal_ble.UniversalBleCallbackChannel.onConnectionChanged"),
+            any(ByteBuffer::class.java),
+            any(BinaryMessenger.BinaryReply::class.java),
+        )
+        plugin.setField("callbackChannel", UniversalBleCallbackChannel(messenger))
+        owned[gatt] = Unit
+        gatt.saveCacheIfNeeded()
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                plugin.onConnectionStateChange(gatt, BluetoothGatt.GATT_SUCCESS, BluetoothGatt.STATE_DISCONNECTED)
+            }
+            assertSame(gatt, deviceId.findGatt())
+            assertTrue(owned.containsKey(gatt))
+            assertEquals(1, messages.size)
+            assertEquals(deviceId, messages.single()[0])
+            assertEquals(false, messages.single()[1])
+            assertEquals("GATT_CLOSE_FAILED", messages.single()[2])
+        } finally {
+            gatt.removeCacheIfCurrent()
         }
     }
 
