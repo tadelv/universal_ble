@@ -1449,15 +1449,21 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         val state = bluetoothManager.getConnectionState(gatt.device, BluetoothProfile.GATT)
         if (state != BluetoothProfile.STATE_CONNECTED) {
             connectTimestamps.remove(deviceId.connectionKey())
-            gatt.removeCacheIfCurrent()
-            closeGatt(gatt)
-            notifyDisconnected(deviceId, null)
+            val closed = closeGatt(gatt)
+            notifyDisconnected(deviceId, if (closed) null else "GATT_CLOSE_FAILED")
         }
     }
 
-    private fun closeGatt(gatt: BluetoothGatt) {
-        ownedGatts.remove(gatt)
-        gatt.close()
+    private fun closeGatt(gatt: BluetoothGatt): Boolean {
+        return try {
+            gatt.close()
+            gatt.removeCacheIfCurrent()
+            ownedGatts.remove(gatt)
+            true
+        } catch (e: Exception) {
+            UniversalBleLogger.logError("Failed to close gatt for ${gatt.device.address}: $e")
+            false
+        }
     }
 
     private fun notifyDisconnected(
@@ -1502,12 +1508,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             val deviceId = gatt.device.address
             cleanUpConnection(gatt)
             connectTimestamps.remove(deviceId.connectionKey())
-            gatt.removeCacheIfCurrent()
-            try {
-                closeGatt(gatt)
-            } catch (e: Exception) {
-                UniversalBleLogger.logError("Failed to close gatt for $deviceId: $e")
-            }
+            closeGatt(gatt)
         }
         if (notificationError != null) {
             (pendingDeviceIds + gatts.map { it.device.address })
@@ -1667,9 +1668,6 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 connectTimestamps.remove(deviceId.connectionKey())
                 cleanUpConnection(gatt)
 
-            // Send connection changed callback
-                notifyDisconnected(deviceId, status.parseHciErrorCode())
-
             // NOTE: no native GATT-133 retry here (removed 2026-07-14).
             // The status is surfaced to Dart via onConnectionChanged
             // (parseHciErrorCode → "gattError"); retry policy is the
@@ -1677,10 +1675,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             // competing connectGatt clients — itself a 133 cause.
                 if (!shouldAutoConnect) {
                 // Only close GATT resources when autoConnect is disabled
-                    gatt.removeCacheIfCurrent()
                     gatt.disconnect()
                     UniversalBleLogger.logDebug("Closing gatt for ${gatt.device.name}")
-                    closeGatt(gatt)
+                    val closed = closeGatt(gatt)
+                    notifyDisconnected(
+                        deviceId,
+                        if (closed) status.parseHciErrorCode() else "GATT_CLOSE_FAILED"
+                    )
+                } else {
+                    notifyDisconnected(deviceId, status.parseHciErrorCode())
                 }
             // When autoConnect is enabled, keep GATT open for Android to reconnect
             }
