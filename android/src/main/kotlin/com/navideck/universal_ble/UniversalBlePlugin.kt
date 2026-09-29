@@ -63,6 +63,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val localNotificationStates = IdentityHashMap<BluetoothGatt, MutableSet<String>>()
     private val temporaryDiscoveryCleanups = IdentityHashMap<BluetoothGatt, () -> Unit>()
     private val ownedGatts = IdentityHashMap<BluetoothGatt, Unit>()
+    private val pendingDisconnectFallbacks = IdentityHashMap<BluetoothGatt, Runnable>()
+    private val disconnectCallbackGraceMs = 2000L
     private val pairResultFutures = mutableMapOf<String, (Result<Boolean>) -> Unit>()
     private val rssiResultFutureList = mutableListOf<RssiResultFuture>()
     private val autoConnectDevices = mutableSetOf<String>()
@@ -1451,7 +1453,39 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             connectTimestamps.remove(deviceId.connectionKey())
             val closed = closeGatt(gatt)
             notifyDisconnected(deviceId, if (closed) null else "GATT_CLOSE_FAILED", expectedGatt = gatt)
+        } else {
+            scheduleDisconnectFallback(gatt)
         }
+    }
+
+    private fun scheduleDisconnectFallback(gatt: BluetoothGatt) {
+        if (!ownedGatts.containsKey(gatt) || pendingDisconnectFallbacks.containsKey(gatt)) return
+        val deviceId = gatt.device.address
+        lateinit var fallback: Runnable
+        fallback = Runnable {
+            if (pendingDisconnectFallbacks[gatt] !== fallback) return@Runnable
+            pendingDisconnectFallbacks.remove(gatt)
+            if (!ownedGatts.containsKey(gatt)) return@Runnable
+
+            cleanUpConnection(gatt)
+            val stillCurrent = gatt.isCurrentGatt()
+            val closed = closeGatt(gatt)
+            if (closed && stillCurrent) connectTimestamps.remove(deviceId.connectionKey())
+            if (!closed) pendingDisconnectFallbacks[gatt] = fallback
+            notifyDisconnected(
+                deviceId,
+                if (closed) "DISCONNECT_CALLBACK_TIMEOUT" else "GATT_CLOSE_FAILED",
+                expectedGatt = gatt,
+            )
+        }
+        pendingDisconnectFallbacks[gatt] = fallback
+        if (mainThreadHandler?.postDelayed(fallback, disconnectCallbackGraceMs) != true) {
+            fallback.run()
+        }
+    }
+
+    private fun cancelDisconnectFallback(gatt: BluetoothGatt) {
+        pendingDisconnectFallbacks.remove(gatt)?.let { mainThreadHandler?.removeCallbacks(it) }
     }
 
     private fun closeGatt(gatt: BluetoothGatt): Boolean {
@@ -1500,6 +1534,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
         notificationError: String?,
         gatts: List<BluetoothGatt>,
     ) {
+        pendingDisconnectFallbacks.values.toList().forEach { mainThreadHandler?.removeCallbacks(it) }
+        pendingDisconnectFallbacks.clear()
         disposeTemporaryDiscoveryGatts()
         val pendingDeviceIds = pendingConnects.keys.toList()
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
@@ -1630,10 +1666,15 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 "onConnectionStateChange-> Status: $status ${status.parseHciErrorCode()}, NewState: $newState"
             )
 
+            if (newState == BluetoothGatt.STATE_DISCONNECTED) cancelDisconnectFallback(gatt)
             if (!gatt.isCurrentGatt()) {
                 cleanUpConnection(gatt)
                 gatt.disconnect()
                 closeGatt(gatt)
+                return@completeGattCallback
+            }
+
+            if (newState == BluetoothGatt.STATE_CONNECTED && pendingDisconnectFallbacks.containsKey(gatt)) {
                 return@completeGattCallback
             }
 
