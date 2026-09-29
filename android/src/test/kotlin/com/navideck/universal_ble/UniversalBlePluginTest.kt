@@ -32,9 +32,11 @@ import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.mockConstruction
 import org.mockito.Mockito.mockStatic
+import org.mockito.Mockito.mockingDetails
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.verifyNoMoreInteractions
 import org.mockito.Mockito.`when`
 
 internal class UniversalBlePluginTest {
@@ -86,6 +88,7 @@ internal class UniversalBlePluginTest {
     fun connectedCallbackCancelsPendingReconnect() {
         val plugin = UniversalBlePlugin()
         val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
         val gatt = mock(BluetoothGatt::class.java)
         val device = mock(BluetoothDevice::class.java)
         val pendingConnect = mock(Runnable::class.java)
@@ -94,6 +97,7 @@ internal class UniversalBlePluginTest {
         val disconnectTimestamps = plugin.field<MutableMap<String, Long>>("disconnectTimestamps")
 
         plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
         pendingConnects[deviceId.connectionKey()] = pendingConnect
         disconnectTimestamps[deviceId.connectionKey()] = 1L
         `when`(gatt.device).thenReturn(device)
@@ -106,8 +110,92 @@ internal class UniversalBlePluginTest {
             verify(handler).removeCallbacks(pendingConnect)
             assertFalse(pendingConnects.containsKey(deviceId.connectionKey()))
             assertFalse(disconnectTimestamps.containsKey(deviceId.connectionKey()))
+            val events = mockingDetails(callbackChannel).invocations
+                .filter { it.method.name == "onConnectionChanged" }
+                .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) }
+            assertEquals(listOf(Triple(deviceId, true, null)), events)
         } finally {
             gatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun failedConnectedCallbackReportsErrorAndClosesOnlyItsGatt() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val failedGatt = mock(BluetoothGatt::class.java)
+        val failedDevice = mock(BluetoothDevice::class.java)
+        val otherGatt = mock(BluetoothGatt::class.java)
+        val otherDevice = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+        val otherDeviceId = "11:22:33:44:55:66"
+        val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(failedGatt.device).thenReturn(failedDevice)
+        `when`(failedDevice.address).thenReturn(deviceId)
+        `when`(otherGatt.device).thenReturn(otherDevice)
+        `when`(otherDevice.address).thenReturn(otherDeviceId)
+        failedGatt.saveCacheIfNeeded()
+        otherGatt.saveCacheIfNeeded()
+        ownedGatts[failedGatt] = Unit
+        ownedGatts[otherGatt] = Unit
+
+        try {
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(1_000L)
+                plugin.onConnectionStateChange(failedGatt, 133, BluetoothGatt.STATE_CONNECTED)
+            }
+
+            val events = mockingDetails(callbackChannel).invocations
+                .filter { it.method.name == "onConnectionChanged" }
+                .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) }
+            assertEquals(listOf(Triple(deviceId, false, "Unknown Error 133")), events)
+            verify(failedGatt).disconnect()
+            verify(failedGatt).close()
+            assertNull(deviceId.findGatt())
+            assertFalse(ownedGatts.containsKey(failedGatt))
+            assertSame(otherGatt, otherDeviceId.findGatt())
+            assertTrue(ownedGatts.containsKey(otherGatt))
+            verify(otherGatt, never()).disconnect()
+            verify(otherGatt, never()).close()
+        } finally {
+            failedGatt.removeCacheIfCurrent()
+            otherGatt.removeCacheIfCurrent()
+        }
+    }
+
+    @Test
+    fun staleFailedConnectedCallbackDoesNotRetireSameAddressReplacement() {
+        val plugin = UniversalBlePlugin()
+        val handler = handler(runPostedTasks = true)
+        val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
+        val failedGatt = mock(BluetoothGatt::class.java)
+        val replacementGatt = mock(BluetoothGatt::class.java)
+        val device = mock(BluetoothDevice::class.java)
+        val deviceId = "AA:BB:CC:DD:EE:FF"
+
+        plugin.setField("mainThreadHandler", handler)
+        plugin.setField("callbackChannel", callbackChannel)
+        `when`(failedGatt.device).thenReturn(device)
+        `when`(replacementGatt.device).thenReturn(device)
+        `when`(device.address).thenReturn(deviceId)
+        failedGatt.saveCacheIfNeeded()
+        replacementGatt.saveCacheIfNeeded()
+
+        try {
+            plugin.onConnectionStateChange(failedGatt, 133, BluetoothGatt.STATE_CONNECTED)
+
+            verifyNoMoreInteractions(callbackChannel)
+            verify(failedGatt).disconnect()
+            verify(failedGatt).close()
+            assertSame(replacementGatt, deviceId.findGatt())
+            verify(replacementGatt, never()).disconnect()
+            verify(replacementGatt, never()).close()
+        } finally {
+            replacementGatt.removeCacheIfCurrent()
         }
     }
 

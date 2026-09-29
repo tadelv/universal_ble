@@ -1630,11 +1630,22 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             }
 
             if (newState == BluetoothGatt.STATE_CONNECTED) {
-                val connectionKey = gatt.device.address.connectionKey()
+                val deviceId = gatt.device.address
+                val connectionKey = deviceId.connectionKey()
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    autoConnectDevices.remove(connectionKey)
+                    connectTimestamps.remove(connectionKey)
+                    cleanUpConnection(gatt)
+                    notifyDisconnected(deviceId, status.parseHciErrorCode())
+                    gatt.removeCacheIfCurrent()
+                    gatt.disconnect()
+                    closeGatt(gatt)
+                    return@completeGattCallback
+                }
                 pendingConnects.remove(connectionKey)?.let { mainThreadHandler?.removeCallbacks(it) }
                 disconnectTimestamps.remove(connectionKey)
                 callbackChannel?.onConnectionChanged(
-                    gatt.device.address, true, status.parseHciErrorCode()
+                    deviceId, true, null
                 ) {}
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 val deviceId = gatt.device.address
