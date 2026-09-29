@@ -653,7 +653,7 @@ internal class UniversalBlePluginTest {
     }
 
     @Test
-    fun explicitDisconnectFallbackRetainsGattWhenCloseThrowsAndReportsCloseFailure() {
+    fun explicitDisconnectFallbackRetriesAfterCloseFailure() {
         val plugin = UniversalBlePlugin()
         val handler = handler(runPostedTasks = true)
         val callbackChannel = mock(UniversalBleCallbackChannel::class.java)
@@ -661,7 +661,7 @@ internal class UniversalBlePluginTest {
         val device = mock(BluetoothDevice::class.java)
         val gatt = mock(BluetoothGatt::class.java)
         val deviceId = "AA:BB:CC:DD:EE:FF"
-        var fallback: Runnable? = null
+        val fallbacks = mutableListOf<Runnable>()
         val ownedGatts = plugin.field<IdentityHashMap<BluetoothGatt, Unit>>("ownedGatts")
 
         plugin.setField("mainThreadHandler", handler)
@@ -673,8 +673,8 @@ internal class UniversalBlePluginTest {
         `when`(gatt.device).thenReturn(device)
         `when`(device.address).thenReturn(deviceId)
         `when`(handler.postDelayed(any(Runnable::class.java), any(Long::class.javaPrimitiveType)))
-            .thenAnswer { fallback = it.arguments[0] as Runnable; true }
-        doThrow(IllegalStateException("close failed")).`when`(gatt).close()
+            .thenAnswer { fallbacks.add(it.arguments[0] as Runnable); true }
+        doThrow(IllegalStateException("close failed")).doNothing().`when`(gatt).close()
         gatt.saveCacheIfNeeded()
 
         try {
@@ -684,7 +684,7 @@ internal class UniversalBlePluginTest {
             }
             mockStatic(SystemClock::class.java).use { clock ->
                 clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(7_000L)
-                fallback!!.run()
+                fallbacks.single().run()
             }
 
             assertSame(gatt, deviceId.findGatt())
@@ -700,6 +700,25 @@ internal class UniversalBlePluginTest {
                     .map { Triple(it.arguments[0], it.arguments[1], it.arguments[2]) })
             assertTrue(ownedGatts.containsKey(gatt))
             verify(gatt).close()
+            verify(handler, times(1)).postDelayed(any(Runnable::class.java), eq(2_000L))
+
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(9_000L)
+                plugin.disconnect(deviceId)
+            }
+            assertEquals(2, fallbacks.size, "explicit retry should arm a fresh bounded fallback")
+            assertTrue(fallbacks[0] !== fallbacks[1])
+            verify(handler, times(2)).postDelayed(any(Runnable::class.java), eq(2_000L))
+            verify(gatt, times(1)).close()
+            mockStatic(SystemClock::class.java).use { clock ->
+                clock.`when`<Long> { SystemClock.elapsedRealtime() }.thenReturn(11_000L)
+                fallbacks[1].run()
+            }
+
+            verify(gatt, times(2)).close()
+            assertNull(deviceId.findGatt())
+            assertFalse(ownedGatts.containsKey(gatt))
+            assertTrue(plugin.field<IdentityHashMap<BluetoothGatt, Runnable>>("pendingDisconnectFallbacks").isEmpty())
         } finally {
             gatt.removeCacheIfCurrent()
         }

@@ -64,6 +64,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     private val temporaryDiscoveryCleanups = IdentityHashMap<BluetoothGatt, () -> Unit>()
     private val ownedGatts = IdentityHashMap<BluetoothGatt, Unit>()
     private val pendingDisconnectFallbacks = IdentityHashMap<BluetoothGatt, Runnable>()
+    private val failedDisconnectCloses = IdentityHashMap<BluetoothGatt, Unit>()
     private val disconnectCallbackGraceMs = 2000L
     private val pairResultFutures = mutableMapOf<String, (Result<Boolean>) -> Unit>()
     private val rssiResultFutureList = mutableListOf<RssiResultFuture>()
@@ -1471,7 +1472,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             val stillCurrent = gatt.isCurrentGatt()
             val closed = closeGatt(gatt)
             if (closed && stillCurrent) connectTimestamps.remove(deviceId.connectionKey())
-            if (!closed) pendingDisconnectFallbacks[gatt] = fallback
+            if (!closed) failedDisconnectCloses[gatt] = Unit
             notifyDisconnected(
                 deviceId,
                 if (closed) "DISCONNECT_CALLBACK_TIMEOUT" else "GATT_CLOSE_FAILED",
@@ -1493,6 +1494,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
             gatt.close()
             gatt.removeCacheIfCurrent()
             ownedGatts.remove(gatt)
+            failedDisconnectCloses.remove(gatt)
             true
         } catch (e: Exception) {
             UniversalBleLogger.logError("Failed to close gatt for ${gatt.device.address}: $e")
@@ -1536,6 +1538,7 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
     ) {
         pendingDisconnectFallbacks.values.toList().forEach { mainThreadHandler?.removeCallbacks(it) }
         pendingDisconnectFallbacks.clear()
+        failedDisconnectCloses.clear()
         disposeTemporaryDiscoveryGatts()
         val pendingDeviceIds = pendingConnects.keys.toList()
         pendingConnects.values.forEach { mainThreadHandler?.removeCallbacks(it) }
@@ -1674,7 +1677,8 @@ class UniversalBlePlugin : UniversalBlePlatformChannel, BluetoothGattCallback(),
                 return@completeGattCallback
             }
 
-            if (newState == BluetoothGatt.STATE_CONNECTED && pendingDisconnectFallbacks.containsKey(gatt)) {
+            if (newState == BluetoothGatt.STATE_CONNECTED &&
+                (pendingDisconnectFallbacks.containsKey(gatt) || failedDisconnectCloses.containsKey(gatt))) {
                 return@completeGattCallback
             }
 
